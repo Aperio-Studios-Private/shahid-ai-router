@@ -24,14 +24,18 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P2-T05 | SsrfPolicy (scheme + default-deny denylist) + validating resolver (offline rebinding tests) + no-cross-origin redirects | PASS (9 tests) |
 | P2-T06 | Phase gate: full suites, cargo audit (0 vulns; 5 informational Linux-stack warnings), threat-model addendum, security review, report | PASS |
 
-## Phase 3 — First vertical slice (next; decompose at phase entry)
+## Phase 3 — First vertical slice (COMPLETE — see reports/phase-reports/phase-3.md)
 
-- P3-T01 sair-domain types + error taxonomy + capability model (incl. protocol_family per ADR-009)
-- P3-T02 Provider adapter trait + OpenAI-compatible adapter (non-streaming) + wiremock contract tests
-- P3-T03 Routing engine v0 (alias resolution, capability filter, priority strategy, decision record)
-- P3-T04 Gateway `/v1/chat/completions` (non-streaming) + `/v1/models` + request records + integration tests
-- P3-T05 Minimal UI: dashboard, providers, API keys (create/list/test/enable/disable)
-- P3-T06 Phase 3 gate: E2E evidence (client → gateway → mock upstream → request record)
+| ID | Task | Status |
+|---|---|---|
+| P3-T01 | Domain types (UpstreamFailure/FailureAction, capabilities, RoutingDecision) + migration 0002 | PASS |
+| P3-T02 | Repos + route snapshot loader; OpenAI-compatible adapter (body-aware classification) + wiremock contract tests | PASS |
+| P3-T03 | Routing engine v0 + RotationState (ADR-012) + concurrent test | PASS |
+| P3-T04 | /v1/chat/completions + /v1/models + quarantine/rotation/cooldown + 7 E2E tests | PASS |
+| P3-T05 | Management IPC commands (25) + Providers/Aliases UI | PASS |
+| P3-T06 | Gate: 88 tests, clippy clean, live smoke, report | PASS |
+
+## Phase 4 — Rotation & health (next; decompose at phase entry)
 
 ## Phase 4 — Rotation & health (epic)
 

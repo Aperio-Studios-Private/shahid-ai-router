@@ -6,18 +6,18 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 
 | Requirement | Description | Phase | Task | Evidence | Status |
 |---|---|---:|---|---|---|
-| FR-001 | Provider management | 3+ | P3-T05 (UI), P3-T04 (backend) | TBD | Planned |
-| FR-002 | Credential pool | 4 | Phase 4 epic | TBD | Planned |
-| FR-003 | Model catalogue | 3 | P3-T01/T03 | TBD | Planned |
-| FR-004 | Virtual aliases (same-protocol, ADR-009) | 3-5 | P3-T03, Phase 5 | TBD | Planned |
+| FR-001 | Provider management | 3+ | P3-T05 (UI/IPC), P3-T04 | reports/phase-reports/phase-3.md | Implemented |
+| FR-002 | Credential pool | 4 | P3-T05 (metadata CRUD), Phase 4 (rotation/health) | reports/phase-reports/phase-3.md | In progress |
+| FR-003 | Model catalogue | 3 | P3-T02 (repos) + P3-T05 (UI) | reports/phase-reports/phase-3.md | Implemented |
+| FR-004 | Virtual aliases (same-protocol, ADR-009) | 3-5 | P3-T03/T05, Phase 5 | reports/phase-reports/phase-3.md | Implemented (priority/rr/weighted; lru/pin 501) |
 | FR-005 | Local gateway (loopback + auth) | 3 | P3-T04 (middleware: P2-T03) | reports/phase-reports/phase-2.md | Implemented (middleware + lifecycle; protocol surfaces Phase 3) |
-| FR-006 | Protocol surfaces (ADR-010 scope) | 3,6 | P3-T04, Phase 6 | TBD | Planned |
-| FR-007 | Capability-aware routing | 3-5 | P3-T03, Phase 5 | TBD | Planned |
-| FR-008 | Rotation | 4 | Phase 4 epic | TBD | Planned |
-| FR-009 | Retry/failover | 4 | Phase 4 epic | TBD | Planned |
+| FR-006 | Protocol surfaces (ADR-010 scope) | 3,6 | P3-T04 (openai), Phase 6 (anthropic/gemini) | reports/phase-reports/phase-3.md | In progress |
+| FR-007 | Capability-aware routing | 3-5 | P3-T03 | reports/phase-reports/phase-3.md | Implemented (protocol filter; capability expansion Phase 5) |
+| FR-008 | Rotation | 4 | P3-T03/T04 (v0), Phase 4 (account grouping) | reports/phase-reports/phase-3.md | In progress |
+| FR-009 | Retry/failover | 4 | P3-T04 (ADR-017 semantics) | reports/phase-reports/phase-3.md | Implemented (v0) |
 | FR-010 | Streaming | 7 | Phase 7 epic | TBD | Planned |
-| FR-011 | Request history | 3 | P3-T04 | TBD | Planned |
-| FR-012 | Health diagnostics | 4+ | Phase 4 epic | TBD | Planned |
+| FR-011 | Request history | 3 | P3-T04 | reports/phase-reports/phase-3.md | Implemented (metadata + decision JSON) |
+| FR-012 | Health diagnostics | 4+ | P3-T03/T04 (decision + exclusions), Phase 4 (UI) | reports/phase-reports/phase-3.md | In progress |
 | FR-013 | Agent profiles | 8 | Phase 8 epic | TBD | Planned |
 | FR-014 | Backup/restore | 10 | Phase 10 epic | TBD | Planned |
 | FR-015 | Lifecycle | 1+ | P1-T04 (skeleton), P2-T03 | reports/phase-reports/phase-2.md | Implemented (start/stop/drain/exit hook) |

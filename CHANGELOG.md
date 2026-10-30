@@ -17,3 +17,10 @@ All notable changes to Shahid AI Router. Format: Keep a Changelog; versioning: S
 - React 19 + Vite 8 + TypeScript 7 + Tailwind 4 frontend with docs/08 navigation skeleton, light/dark theme, vitest component tests.
 - Placeholder icon set and generator script (`scripts/make-placeholder-icons.mjs`).
 - GitHub Actions CI matrix (Windows/macOS): fmt, clippy `-D warnings`, cargo test, frontend typecheck/test/build.
+
+### Added (Phase 2 — Security & persistence)
+- Full docs/07 schema (migrations 0001/0002) with FK delete-rule matrix and probe tests; OS vault (keyring 4.x; Windows Credential Manager verified live) with test-mock release guard; gateway token lifecycle (32-byte CSPRNG, constant-time verify, crash-safe regeneration with live hot-swap); middleware stack (auth, Host allowlist, 503-at-capacity, 408 timeout, 413 body limit, slowloris header-read timeout); redacted telemetry with sweep tests and rotating file sink; SSRF policy + validating resolver + SsrfCheckedClient boundary (ADR-015).
+- Independent security review pass with all High/Medium findings fixed and re-verified (audits/security/).
+
+### Added (Phase 3 — First vertical slice)
+- OpenAI-compatible  (non-streaming passthrough) and ; body-aware error classification (ADR-017: 429+insufficient_quota = billing, not rate-limit); routing engine v0 (priority/round-robin/weighted, cooldown, quarantine; lru/pin → structured 501) with deterministic concurrent-rotation tests; request records with full routing decisions (FR-012); management IPC + Providers/Aliases UI; secrets vault-backed, deleted with credentials.
