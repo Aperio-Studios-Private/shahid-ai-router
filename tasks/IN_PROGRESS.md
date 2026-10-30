@@ -9,4 +9,5 @@
 - **Phase 4 (rotation & health) — COMPLETE, gate PASS** (reports/phase-reports/phase-4.md): account grouping (quota truth), per-deployment concurrency (FR-021), health-event persistence fix (R4-01), deterministic failure suite. 93 tests green.
 - **Phase 5 (OpenRouter + capability matrix) — COMPLETE, gate PASS** (reports/phase-reports/phase-5.md). 100 tests green.
 - **Phase 6 (native Anthropic + Gemini surfaces) — COMPLETE, gate PASS** (reports/phase-reports/phase-6.md). 118 tests green.
-- Next: Phase 7 entry (streaming) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).
+- **Phase 7 (streaming) — COMPLETE, gate PASS** (reports/phase-reports/phase-7.md). 123 tests green.
+- Next: Phase 8 entry (agent profiles) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).

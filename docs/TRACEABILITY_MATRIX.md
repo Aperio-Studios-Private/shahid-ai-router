@@ -15,7 +15,7 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 | FR-007 | Capability-aware routing | 3-5 | P3-T03 + P5 (request-derived requirements) | reports/phase-reports/phase-5.md | Implemented (vision heuristic deferred) |
 | FR-008 | Rotation | 4 | P3-T03/T04 + P4 (account grouping) | reports/phase-reports/phase-4.md | Implemented |
 | FR-009 | Retry/failover | 4 | P3-T04 (ADR-017 semantics) | reports/phase-reports/phase-3.md | Implemented (v0) |
-| FR-010 | Streaming | 7 | Phase 7 epic | TBD | Planned |
+| FR-010 | Streaming | 7 | P7 (SSE relay + commit boundary) | reports/phase-reports/phase-7.md | Implemented (stream token counts NULL — FR-011 residual; raw-TCP scenarios Phase 11) |
 | FR-011 | Request history | 3 | P3-T04 | reports/phase-reports/phase-3.md | Implemented (metadata + decision JSON) |
 | FR-012 | Health diagnostics | 4+ | P3 + P4 (events/summary) | reports/phase-reports/phase-4.md | Implemented (UI Phase 9) |
 | FR-013 | Agent profiles | 8 | Phase 8 epic | TBD | Planned |

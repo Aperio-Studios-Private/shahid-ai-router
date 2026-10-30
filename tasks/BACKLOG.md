@@ -64,9 +64,14 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P6-T04 | Family-parameterized handler (envelopes per family, status preservation F-1, pre-route validation F-6) | PASS |
 | P6-T05 | Surface E2E suite (9 tests) + gate | PASS |
 
-## Phase 7 — Streaming (epic)
+## Phase 7 — Streaming (COMPLETE — see reports/phase-reports/phase-7.md)
 
-- SSE pass-through for all surfaces, stream-commit failover boundary, no-retry-after-commit tests.
+| ID | Task | Status |
+|---|---|---|
+| P7-T01 | Plan + independent review (REVISE BEFORE IMPLEMENTATION; F-1/F-2 High resolved) | PASS |
+| P7-T02 | Streaming clients (no total deadline) + shared stream_request + 3 adapter variants | PASS |
+| P7-T03 | Handler commit boundary + PermitStream (FR-021) + streamed records (F-5) | PASS |
+| P7-T04 | 5 E2E streaming tests + gate | PASS |
 
 ## Phase 8 — Agent profiles (epic)
 
