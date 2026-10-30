@@ -14,7 +14,7 @@ use sair_vault::SecretBytes;
 use serde_json::Value;
 
 use crate::http::SsrfCheckedClient;
-use crate::openai::{ChatOutcome, MAX_RESPONSE_BYTES};
+use crate::openai::{ChatOutcome, MAX_RESPONSE_BYTES, StreamStart, stream_request};
 
 /// Sends one non-streaming `models/{model}:generateContent` request.
 ///
@@ -225,6 +225,51 @@ fn truncate_detail(s: &str) -> String {
         }
         format!("{}…", &s[..cut])
     }
+}
+
+/// Streaming variant (Phase 7, F-3): posts to
+/// `{base}/v1beta/models/{model}:streamGenerateContent?alt=sse` — the query
+/// is appended by the gateway (never `key`).
+///
+/// # Errors
+/// See [`generate_content`].
+pub async fn generate_content_streaming(
+    client: &SsrfCheckedClient,
+    base_url: &str,
+    model_id: &str,
+    credential: &SecretBytes,
+    body: Value,
+) -> Result<StreamStart, UpstreamFailure> {
+    let key = credential
+        .expose_str()
+        .map_err(|_| UpstreamFailure {
+            category: ErrorCategory::Unknown,
+            status: None,
+            code: None,
+            detail: "credential is not valid UTF-8".to_string(),
+            retry_after_secs: None,
+        })?
+        .to_string();
+    let base = base_url.trim_end_matches('/');
+    let endpoint = url::Url::parse(&format!(
+        "{base}/v1beta/models/{model_id}:streamGenerateContent?alt=sse"
+    ))
+    .map_err(|e| UpstreamFailure {
+        category: ErrorCategory::InvalidRequest,
+        status: None,
+        code: None,
+        detail: format!("invalid upstream base URL: {e}"),
+        retry_after_secs: None,
+    })?;
+    stream_request(
+        client,
+        endpoint,
+        ("x-goog-api-key", &key),
+        &[],
+        body,
+        classify,
+    )
+    .await
 }
 
 #[cfg(test)]

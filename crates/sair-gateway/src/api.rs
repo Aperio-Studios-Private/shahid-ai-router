@@ -24,8 +24,11 @@ use sair_vault::SecretStore;
 use serde_json::{Value, json};
 
 use crate::routing::{RotationState, cooldown_for, plan_route};
-use sair_providers::openai::{ChatOutcome, send_chat, send_chat_with_headers};
-use sair_providers::{SsrfCheckedClient, SsrfPolicy, build_client};
+use sair_providers::gemini::generate_content_streaming;
+use sair_providers::openai::{
+    ChatOutcome, StreamStart, send_chat, send_chat_streaming_with_headers, send_chat_with_headers,
+};
+use sair_providers::{SsrfCheckedClient, SsrfPolicy, build_client, build_streaming_client};
 
 /// Maps a classification to a schema-legal `health_events.event` value
 /// (R4-01: the CHECK constraint allows only the listed events).
@@ -49,6 +52,10 @@ pub struct ApiDeps {
     /// Loopback-opt-in client, used only for providers that explicitly
     /// allow it (`providers.allow_loopback`).
     pub client_loopback: SsrfCheckedClient,
+    /// Phase 7 (F-1): streaming clients carry NO total deadline — only
+    /// connect + idle read bounds — so streams may outlive `timeout_ms`.
+    pub client_strict_streaming: SsrfCheckedClient,
+    pub client_loopback_streaming: SsrfCheckedClient,
     /// FR-021: per-deployment concurrency semaphores (R4-06: setting applies
     /// at gateway (re)start).
     pub deployment_concurrency: usize,
@@ -72,6 +79,8 @@ impl ApiDeps {
             rotation: Arc::new(RotationState::new()),
             client_strict: build_client(SsrfPolicy::default()),
             client_loopback: build_client(SsrfPolicy::allow_loopback()),
+            client_strict_streaming: build_streaming_client(SsrfPolicy::default()),
+            client_loopback_streaming: build_streaming_client(SsrfPolicy::allow_loopback()),
             deployment_concurrency: deployment_concurrency.max(1),
             openrouter_attribution,
             semaphores: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -109,6 +118,15 @@ fn correlation_id() -> String {
     rng.fill(&mut bytes)
         .expect("OS CSPRNG must not fail; unrecoverable");
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Detects  in the raw body (fast pre-parse; the parsed body
+/// remains the authority inside process_chat).
+fn parsed_stream_flag(body: &Bytes) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("stream").and_then(Value::as_bool))
+        .unwrap_or(false)
 }
 
 fn openai_error(status: StatusCode, code: &str, message: &str, extra: Value) -> Response {
@@ -281,12 +299,13 @@ fn family_local_error(
     }
 }
 
-/// POST /v1/chat/completions (non-streaming, Phase 3 surface).
+/// POST /v1/chat/completions (Phase 3 surface; streaming since Phase 7).
 async fn chat_completions(
     State(api): State<Arc<ApiDeps>>,
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response {
+    let stream_requested = parsed_stream_flag(&body);
     process_chat(
         api,
         Surface::OpenAiChat,
@@ -294,6 +313,7 @@ async fn chat_completions(
         headers,
         body,
         Operation::Chat,
+        stream_requested,
     )
     .await
 }
@@ -304,6 +324,7 @@ async fn anthropic_messages(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response {
+    let stream_requested = parsed_stream_flag(&body);
     process_chat(
         api,
         Surface::AnthropicMessages,
@@ -311,6 +332,7 @@ async fn anthropic_messages(
         headers,
         body,
         Operation::Chat,
+        stream_requested,
     )
     .await
 }
@@ -329,6 +351,7 @@ async fn anthropic_count_tokens(
         headers,
         body,
         Operation::CountTokens,
+        false,
     )
     .await
 }
@@ -371,16 +394,7 @@ async fn gemini_generate(
             json!({}),
         );
     };
-    if method != "generateContent" {
-        if method == "streamGenerateContent" {
-            return family_local_error(
-                Surface::GeminiGenerateContent,
-                StatusCode::BAD_REQUEST,
-                "streaming_not_supported",
-                "streaming is not implemented yet (planned Phase 7)",
-                json!({}),
-            );
-        }
+    if method != "generateContent" && method != "streamGenerateContent" {
         return family_local_error(
             Surface::GeminiGenerateContent,
             StatusCode::NOT_FOUND,
@@ -389,6 +403,7 @@ async fn gemini_generate(
             json!({}),
         );
     }
+    let stream_requested = method == "streamGenerateContent";
     process_chat(
         api,
         Surface::GeminiGenerateContent,
@@ -396,6 +411,7 @@ async fn gemini_generate(
         headers,
         body,
         Operation::Chat,
+        stream_requested,
     )
     .await
 }
@@ -409,13 +425,6 @@ fn validate_request(
 ) -> Result<(), (StatusCode, &'static str, String)> {
     match surface {
         Surface::OpenAiChat => {
-            if parsed.get("stream").and_then(Value::as_bool) == Some(true) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "streaming_not_supported",
-                    "streaming is not implemented yet (planned Phase 7)".to_string(),
-                ));
-            }
             if parsed.get("model").and_then(Value::as_str).is_none() {
                 return Err((
                     StatusCode::BAD_REQUEST,
@@ -425,13 +434,6 @@ fn validate_request(
             }
         }
         Surface::AnthropicMessages => {
-            if parsed.get("stream").and_then(Value::as_bool) == Some(true) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "streaming_not_supported",
-                    "streaming is not implemented yet (planned Phase 7)".to_string(),
-                ));
-            }
             // F-8: count_tokens requires model + messages but NOT max_tokens.
             let needs_max_tokens = operation == Operation::Chat;
             if parsed.get("model").and_then(Value::as_str).is_none()
@@ -465,9 +467,97 @@ enum Operation {
     CountTokens,
 }
 
+/// What one upstream candidate produced (Phase 7).
+enum UpstreamCall {
+    Chat(ChatOutcome),
+    /// SSE committed: the byte stream must be relayed; no failover after.
+    CommittedStream(sair_providers::openai::StreamOutcome),
+    /// 2xx non-SSE body (F-2): normal passthrough.
+    NonStreamed {
+        status: u16,
+        body: Value,
+    },
+}
+
+/// FR-021: a stream wrapper that releases the deployment permit when the
+/// relayed stream ends (F-6: the permit lives as long as the stream).
+struct PermitStream<S> {
+    inner: S,
+    /// Held (not read) so the deployment slot stays occupied until the
+    /// relayed stream ends (FR-021).
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl<S> PermitStream<S> {
+    fn new(inner: S, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        Self {
+            inner,
+            _permit: permit,
+        }
+    }
+}
+
+impl<S> futures_core::Stream for PermitStream<S>
+where
+    S: futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin,
+{
+    type Item = std::result::Result<bytes::Bytes, reqwest::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+/// Maps a family streaming start into the unified upstream-call shape.
+fn upstream_call_from_start(start: StreamStart) -> UpstreamCall {
+    match start {
+        StreamStart::Committed(outcome) => UpstreamCall::CommittedStream(outcome),
+        StreamStart::NonStreamed { status, body } => UpstreamCall::NonStreamed { status, body },
+    }
+}
+
+/// Per-family usage extraction for non-streamed bodies.
+fn extract_usage(surface: Surface, body: &Value) -> (Option<i64>, Option<i64>) {
+    let usage = match surface {
+        Surface::OpenAiChat => body.get("usage").map(|u| (u, u)),
+        Surface::AnthropicMessages => body.get("usage").map(|u| (u, u)),
+        Surface::GeminiGenerateContent => body.get("usageMetadata").map(|u| (u, u)),
+    };
+    match surface {
+        Surface::OpenAiChat => (
+            usage
+                .and_then(|(u, _)| u.get("prompt_tokens"))
+                .and_then(Value::as_i64),
+            usage
+                .and_then(|(_, u)| u.get("completion_tokens"))
+                .and_then(Value::as_i64),
+        ),
+        Surface::AnthropicMessages => (
+            usage
+                .and_then(|(u, _)| u.get("input_tokens"))
+                .and_then(Value::as_i64),
+            usage
+                .and_then(|(_, u)| u.get("output_tokens"))
+                .and_then(Value::as_i64),
+        ),
+        Surface::GeminiGenerateContent => (
+            usage
+                .and_then(|(u, _)| u.get("promptTokenCount"))
+                .and_then(Value::as_i64),
+            usage
+                .and_then(|(_, u)| u.get("candidatesTokenCount"))
+                .and_then(Value::as_i64),
+        ),
+    }
+}
+
 /// Family-parameterized chat/count flow: validation, routing, rotation loop,
 /// per-family envelopes (Phase 6 refactor; behavior preserved per family).
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn process_chat(
     api: Arc<ApiDeps>,
     surface: Surface,
@@ -475,6 +565,7 @@ async fn process_chat(
     headers: axum::http::HeaderMap,
     body: Bytes,
     operation: Operation,
+    stream_requested: bool,
 ) -> Response {
     let started = Instant::now();
     let correlation = correlation_id();
@@ -612,7 +703,13 @@ async fn process_chat(
         }
     };
 
-    let decision_json = serde_json::to_string(&decision).ok();
+    let decision_json = Some(
+        serde_json::json!({
+            "decision": decision,
+            "streamed": stream_requested,
+        })
+        .to_string(),
+    );
     let mut last_failure: Option<UpstreamFailure> = None;
     // R4-02: never attempt the same credential twice within one request —
     // a just-cooled credential must not be re-tried via a second deployment.
@@ -699,9 +796,62 @@ async fn process_chat(
         // Phase 6: per-surface adapter dispatch. OpenRouter attribution
         // (F-1, Phase 5) applies only on the OpenAI surface to openrouter
         // providers — never leaked elsewhere.
+        // Phase 7 (F-1): streaming requests use the dedicated streaming
+        // clients (no total deadline) and the F-2 commit predicate.
+        let streaming_client = if candidate.allow_loopback {
+            &api.client_loopback_streaming
+        } else {
+            &api.client_strict_streaming
+        };
         let send_result = match (surface, operation) {
+            (Surface::OpenAiChat, Operation::Chat) if stream_requested => {
+                let extra = if candidate.provider_type == "openrouter" {
+                    api.openrouter_attribution.headers()
+                } else {
+                    Vec::new()
+                };
+                send_chat_streaming_with_headers(
+                    streaming_client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    parsed.clone(),
+                    &extra,
+                )
+                .await
+                .map(upstream_call_from_start)
+            }
+            (Surface::AnthropicMessages, Operation::Chat) if stream_requested => {
+                let version = headers
+                    .get("anthropic-version")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(sair_providers::anthropic::DEFAULT_ANTHROPIC_VERSION)
+                    .to_string();
+                sair_providers::anthropic::send_messages_streaming(
+                    streaming_client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    &version,
+                    parsed.clone(),
+                )
+                .await
+                .map(upstream_call_from_start)
+            }
+            (Surface::GeminiGenerateContent, Operation::Chat) if stream_requested => {
+                generate_content_streaming(
+                    streaming_client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    parsed.clone(),
+                )
+                .await
+                .map(upstream_call_from_start)
+            }
+
             (Surface::OpenAiChat, Operation::Chat) => {
-                if candidate.provider_type == "openrouter" {
+                let outcome = if candidate.provider_type == "openrouter" {
                     let extra = api.openrouter_attribution.headers();
                     send_chat_with_headers(
                         client,
@@ -723,7 +873,8 @@ async fn process_chat(
                         timeout,
                     )
                     .await
-                }
+                };
+                outcome.map(UpstreamCall::Chat)
             }
             (Surface::AnthropicMessages, Operation::Chat) => {
                 // F-5: forward a validated client anthropic-version, else the
@@ -743,6 +894,7 @@ async fn process_chat(
                     timeout,
                 )
                 .await
+                .map(UpstreamCall::Chat)
             }
             (Surface::AnthropicMessages, Operation::CountTokens) => {
                 let version = headers
@@ -760,6 +912,7 @@ async fn process_chat(
                     timeout,
                 )
                 .await
+                .map(UpstreamCall::Chat)
             }
             // count_tokens is defined only for the Anthropic surface
             // (ADR-010); the count handler routes only AnthropicMessages,
@@ -770,25 +923,24 @@ async fn process_chat(
                     "count_tokens is only supported on the anthropic surface",
                 ))
             }
-            (Surface::GeminiGenerateContent, _) => {
-                sair_providers::gemini::generate_content(
-                    client,
-                    &base,
-                    &candidate.model_id,
-                    &secret,
-                    parsed.clone(),
-                    timeout,
-                )
-                .await
-            }
+            (Surface::GeminiGenerateContent, _) => sair_providers::gemini::generate_content(
+                client,
+                &base,
+                &candidate.model_id,
+                &secret,
+                parsed.clone(),
+                timeout,
+            )
+            .await
+            .map(UpstreamCall::Chat),
         };
         match send_result {
-            Ok(ChatOutcome {
+            Ok(UpstreamCall::Chat(ChatOutcome {
                 status,
                 body,
                 tokens_in,
                 tokens_out,
-            }) => {
+            })) => {
                 let latency = started.elapsed().as_millis() as i64;
                 let _ = api
                     .db
@@ -811,6 +963,79 @@ async fn process_chat(
                 )
                 .await;
                 // Release the deployment slot before responding (FR-021).
+                drop(deployment_permit);
+                return (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+                    Json(body),
+                )
+                    .into_response();
+            }
+            Ok(UpstreamCall::CommittedStream(outcome)) => {
+                // FR-010/docs/05: commitment point. From here the loop is
+                // exited by construction — no failover after bytes flow.
+                let latency = started.elapsed().as_millis() as i64;
+                let _ = api
+                    .db
+                    .repos()
+                    .touch_credential_used(&candidate.credential_id)
+                    .await;
+                record(
+                    &api,
+                    surface,
+                    operation,
+                    &correlation,
+                    alias,
+                    candidate,
+                    Some(outcome.status),
+                    None,
+                    latency,
+                    None,
+                    None,
+                    &decision_json,
+                )
+                .await;
+                let content_type = outcome
+                    .content_type
+                    .clone()
+                    .unwrap_or_else(|| "text/event-stream".to_string());
+                // FR-021: the permit moves INTO the response stream and is
+                // released when the relayed stream ends (F-6 normative).
+                let body = axum::body::Body::from_stream(PermitStream::new(
+                    outcome.byte_stream,
+                    deployment_permit,
+                ));
+                return (
+                    StatusCode::from_u16(outcome.status).unwrap_or(StatusCode::OK),
+                    [(axum::http::header::CONTENT_TYPE, content_type)],
+                    body,
+                )
+                    .into_response();
+            }
+            Ok(UpstreamCall::NonStreamed { status, body }) => {
+                // F-2: 2xx non-SSE → mapped through the family usage shape
+                // and returned as a normal (non-streamed) passthrough.
+                let (tokens_in, tokens_out) = extract_usage(surface, &body);
+                let latency = started.elapsed().as_millis() as i64;
+                let _ = api
+                    .db
+                    .repos()
+                    .touch_credential_used(&candidate.credential_id)
+                    .await;
+                record(
+                    &api,
+                    surface,
+                    operation,
+                    &correlation,
+                    alias,
+                    candidate,
+                    Some(status),
+                    None,
+                    latency,
+                    tokens_in,
+                    tokens_out,
+                    &decision_json,
+                )
+                .await;
                 drop(deployment_permit);
                 return (
                     StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
@@ -1202,9 +1427,15 @@ mod tests {
         handle.stop(Duration::from_secs(2)).await.unwrap();
     }
 
+    /// Phase 7: streaming is supported. A 2xx non-SSE upstream response
+    /// resolves through the F-2 predicate as non-streamed passthrough.
     #[tokio::test]
-    async fn streaming_is_rejected_structurally() {
+    async fn streaming_request_with_plain_json_upstream_passes_through() {
         let upstream = MockServer::start().await;
+        wiremock::Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "cmpl-plain"})))
+            .mount(&upstream)
+            .await;
         let handle = setup(&upstream).await;
         let response = chat(
             &handle,
@@ -1212,9 +1443,11 @@ mod tests {
             json!({"model": "test-model", "stream": true, "messages": []}),
         )
         .await;
-        assert_eq!(response.status(), 400);
-        let body: Value = response.json().await.unwrap();
-        assert_eq!(body["error"]["code"], "streaming_not_supported");
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        assert_eq!(status, 200, "body: {text}");
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["id"], "cmpl-plain");
         handle.stop(Duration::from_secs(2)).await.unwrap();
     }
 

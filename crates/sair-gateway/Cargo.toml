@@ -23,6 +23,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+futures-core = "0.3"
+bytes = "1"
+reqwest = { workspace = true }
 url = "2"
 
 subtle = { workspace = true }

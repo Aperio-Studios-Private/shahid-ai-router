@@ -318,6 +318,43 @@ impl SsrfCheckedClient {
     }
 }
 
+/// As [`build_client_with_timeout`], but for STREAMING: no total deadline
+/// (Phase 7 review F-1 — a total timeout would truncate a long-lived SSE
+/// stream after commitment). Bounded by `connect_timeout` (establishment)
+/// and `read_timeout` (idle between reads, client-level in reqwest 0.13).
+#[must_use]
+pub fn build_streaming_client(policy: SsrfPolicy) -> SsrfCheckedClient {
+    let redirect_policy = policy.clone();
+    let inner = reqwest::Client::builder()
+        .dns_resolver(Arc::new(ValidatingResolver::new(policy.clone())))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 3 {
+                return attempt.error("too many redirects");
+            }
+            let Some(prev) = attempt.previous().last() else {
+                return attempt.follow();
+            };
+            if redirect_policy.redirect_allowed(
+                prev.host_str().unwrap_or_default(),
+                prev.scheme(),
+                attempt.url().host_str().unwrap_or_default(),
+                attempt.url().scheme(),
+            ) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(300))
+        .build()
+        .expect("streaming client must build; static policy and resolver only");
+    SsrfCheckedClient {
+        client: inner,
+        policy,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AddressSource, SsrfError, SsrfPolicy, ValidatingResolver, build_client};

@@ -12,7 +12,7 @@ use sair_vault::SecretBytes;
 use serde_json::Value;
 
 use crate::http::SsrfCheckedClient;
-use crate::openai::{ChatOutcome, MAX_RESPONSE_BYTES, is_header_safe};
+use crate::openai::{ChatOutcome, MAX_RESPONSE_BYTES, StreamStart, is_header_safe, stream_request};
 
 /// Pinned default `anthropic-version` (legacy-supported; F-5: a client's
 /// validated header is forwarded instead when present).
@@ -312,6 +312,57 @@ pub async fn count_tokens(
     } else {
         Err(classify(status, &parsed))
     }
+}
+
+/// Streaming variant (Phase 7): `stream:true` stays in the body; SSE on 2xx
+/// commits, other 2xx resolves as non-streamed passthrough (F-2 predicate).
+///
+/// # Errors
+/// See [`send_messages`].
+pub async fn send_messages_streaming(
+    client: &SsrfCheckedClient,
+    base_url: &str,
+    model_id: &str,
+    credential: &SecretBytes,
+    anthropic_version: &str,
+    mut body: Value,
+) -> Result<StreamStart, UpstreamFailure> {
+    let key = credential
+        .expose_str()
+        .map_err(|_| UpstreamFailure {
+            category: ErrorCategory::Unknown,
+            status: None,
+            code: None,
+            detail: "credential is not valid UTF-8".to_string(),
+            retry_after_secs: None,
+        })?
+        .to_string();
+    let base = base_url.trim_end_matches('/');
+    let endpoint =
+        url::Url::parse(&format!("{base}/v1/messages")).map_err(|e| UpstreamFailure {
+            category: ErrorCategory::InvalidRequest,
+            status: None,
+            code: None,
+            detail: format!("invalid upstream base URL: {e}"),
+            retry_after_secs: None,
+        })?;
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("model".to_string(), Value::String(model_id.to_string()));
+    }
+    let version = if is_header_safe(anthropic_version) {
+        anthropic_version
+    } else {
+        DEFAULT_ANTHROPIC_VERSION
+    };
+    stream_request(
+        client,
+        endpoint,
+        ("x-api-key", &key),
+        &[("anthropic-version".to_string(), version.to_string())],
+        body,
+        classify,
+    )
+    .await
 }
 
 #[cfg(test)]

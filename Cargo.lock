@@ -3517,7 +3517,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
+ "futures-core",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -3560,6 +3562,8 @@ dependencies = [
 name = "sair-providers"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "futures-core",
  "reqwest",
  "rustls",
  "sair-domain",

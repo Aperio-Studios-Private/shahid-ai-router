@@ -42,6 +42,28 @@ pub fn is_header_safe(value: &str) -> bool {
 /// # Errors
 /// [`UpstreamFailure`] with the docs/04 category; transport failures map to
 /// `TransportFailure`/`Timeout`.
+/// A committed SSE stream (Phase 7): the upstream accepted the streaming
+/// request; relaying must begin. `content_type` is passed through verbatim.
+pub struct StreamOutcome {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub byte_stream:
+        std::pin::Pin<Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
+}
+
+/// What a streaming request produced (Phase 7, F-2 total commit predicate):
+/// SSE on 2xx → committed [`StreamOutcome`]; any other 2xx → bounded
+/// non-streamed success passthrough; non-2xx → classified error (rotation
+/// still legal pre-commit).
+pub enum StreamStart {
+    Committed(StreamOutcome),
+    /// 2xx without SSE content-type (F-2): bounded body, mapped per family.
+    NonStreamed {
+        status: u16,
+        body: Value,
+    },
+}
+
 pub async fn send_chat(
     client: &SsrfCheckedClient,
     base_url: &str,
@@ -290,6 +312,142 @@ fn truncate_detail(s: &str) -> String {
         }
         format!("{}…", &s[..cut])
     }
+}
+
+/// Shared streaming request core (Phase 7): sends `body` verbatim, applies
+/// the F-2 total commit predicate, and classifies non-2xx with the
+/// family-provided classifier. Streaming clients carry NO total timeout
+/// (F-1) — callers must pass a `build_streaming_client` client.
+///
+/// # Errors
+/// Classified [`UpstreamFailure`] for non-2xx and gateway-detected
+/// malformed/oversized bodies.
+pub async fn stream_request(
+    client: &SsrfCheckedClient,
+    endpoint: url::Url,
+    auth_header: (&str, &str),
+    extra_headers: &[(String, String)],
+    body: Value,
+    classify_fn: fn(u16, &Value) -> UpstreamFailure,
+) -> Result<StreamStart, UpstreamFailure> {
+    let request = client
+        .request(reqwest::Method::POST, endpoint)
+        .map_err(|e| UpstreamFailure {
+            category: ErrorCategory::InvalidRequest,
+            status: None,
+            code: None,
+            detail: format!("SSRF policy rejected upstream: {e}"),
+            retry_after_secs: None,
+        })?
+        .header(auth_header.0, auth_header.1)
+        .json(&body);
+    let request = extra_headers.iter().fold(request, |req, (name, value)| {
+        match (
+            reqwest::header::HeaderName::try_from(name.as_str()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => req.header(n, v),
+            _ => {
+                tracing::warn!(header = %name, "skipping invalid attribution header");
+                req
+            }
+        }
+    });
+    let response = request.send().await.map_err(|e| classify_transport(&e))?;
+    let status = response.status().as_u16();
+
+    // F-2 total commit predicate: SSE content-type on 2xx commits; anything
+    // else is buffered (bounded) and resolved as passthrough or error.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if (200..300).contains(&status)
+        && content_type
+            .as_deref()
+            .is_some_and(|ct| ct.starts_with("text/event-stream"))
+    {
+        return Ok(StreamStart::Committed(StreamOutcome {
+            status,
+            content_type,
+            byte_stream: Box::pin(response.bytes_stream()),
+        }));
+    }
+
+    let bytes = response.bytes().await.map_err(|e| classify_transport(&e))?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(UpstreamFailure {
+            category: ErrorCategory::TransportFailure,
+            status: Some(status),
+            code: Some("response_too_large".to_string()),
+            detail: format!("upstream body exceeded {MAX_RESPONSE_BYTES} bytes"),
+            retry_after_secs: None,
+        });
+    }
+    let parsed: Value = serde_json::from_slice(&bytes).map_err(|e| UpstreamFailure {
+        category: ErrorCategory::Unknown,
+        status: Some(status),
+        code: Some("malformed_upstream_response".to_string()),
+        detail: format!("upstream returned non-JSON body: {e}"),
+        retry_after_secs: None,
+    })?;
+    if (200..300).contains(&status) {
+        Ok(StreamStart::NonStreamed {
+            status,
+            body: parsed,
+        })
+    } else {
+        Err(classify_fn(status, &parsed))
+    }
+}
+
+/// Streaming variant (Phase 7): `stream:true` stays in the body; SSE commits,
+/// other 2xx maps through the non-streamed shape. Attribution headers only
+/// reach openrouter providers via the caller's extra_headers (F-1).
+///
+/// # Errors
+/// See [`send_chat`].
+#[allow(clippy::too_many_arguments)]
+pub async fn send_chat_streaming_with_headers(
+    client: &SsrfCheckedClient,
+    base_url: &str,
+    model_id: &str,
+    credential: &SecretBytes,
+    mut body: Value,
+    extra_headers: &[(String, String)],
+) -> Result<StreamStart, UpstreamFailure> {
+    let key = credential
+        .expose_str()
+        .map_err(|_| UpstreamFailure {
+            category: ErrorCategory::Unknown,
+            status: None,
+            code: None,
+            detail: "credential is not valid UTF-8".to_string(),
+            retry_after_secs: None,
+        })?
+        .to_string();
+    let base = base_url.trim_end_matches('/');
+    let endpoint =
+        url::Url::parse(&format!("{base}/chat/completions")).map_err(|e| UpstreamFailure {
+            category: ErrorCategory::InvalidRequest,
+            status: None,
+            code: None,
+            detail: format!("invalid upstream base URL: {e}"),
+            retry_after_secs: None,
+        })?;
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("model".to_string(), Value::String(model_id.to_string()));
+    }
+    stream_request(
+        client,
+        endpoint,
+        ("Authorization", &format!("Bearer {key}")),
+        extra_headers,
+        body,
+        classify,
+    )
+    .await
 }
 
 #[cfg(test)]
