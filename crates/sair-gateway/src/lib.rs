@@ -16,6 +16,8 @@ pub mod api;
 #[cfg(test)]
 mod api_phase5_tests;
 #[cfg(test)]
+mod api_phase6_tests;
+#[cfg(test)]
 mod api_rotation_tests;
 pub mod handle;
 pub mod routing;

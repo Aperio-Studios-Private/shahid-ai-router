@@ -7,6 +7,8 @@
 //! time (Phase 3).
 
 pub mod adapter;
+pub mod anthropic;
+pub mod gemini;
 pub mod http;
 pub mod openai;
 pub mod openrouter;

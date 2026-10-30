@@ -96,6 +96,9 @@ impl ApiDeps {
 pub fn router(api: Arc<ApiDeps>) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/messages", post(anthropic_messages))
+        .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
+        .route("/v1beta/models/{model_and_method}", post(gemini_generate))
         .route("/v1/models", get(list_models))
         .with_state(api)
 }
@@ -123,38 +126,364 @@ fn openai_error(status: StatusCode, code: &str, message: &str, extra: Value) -> 
         .into_response()
 }
 
-fn upstream_failure_response(
+/// The protocol surface a request arrived on (Phase 6). Determines the
+/// protocol family, wire envelope, and upstream adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    OpenAiChat,
+    AnthropicMessages,
+    GeminiGenerateContent,
+}
+
+impl Surface {
+    #[must_use]
+    pub const fn family(self) -> sair_domain::protocol::ProtocolFamily {
+        match self {
+            Surface::OpenAiChat => sair_domain::protocol::ProtocolFamily::OpenAiChat,
+            Surface::AnthropicMessages => sair_domain::protocol::ProtocolFamily::AnthropicMessages,
+            Surface::GeminiGenerateContent => {
+                sair_domain::protocol::ProtocolFamily::GeminiGenerateContent
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        self.family().as_str()
+    }
+}
+
+/// F-3: every ErrorCategory maps to a wire-legal Anthropic error type.
+#[must_use]
+fn anthropic_error_type(category: ErrorCategory) -> &'static str {
+    match category {
+        ErrorCategory::InvalidCredential => "authentication_error",
+        ErrorCategory::PermissionDenied => "permission_error",
+        ErrorCategory::BillingOrQuota => "billing_error",
+        ErrorCategory::RateLimited => "rate_limit_error",
+        ErrorCategory::ModelUnavailable
+        | ErrorCategory::InvalidRequest
+        | ErrorCategory::ContextLimit => "invalid_request_error",
+        ErrorCategory::Timeout => "timeout_error",
+        ErrorCategory::ProviderUnavailable
+        | ErrorCategory::TransportFailure
+        | ErrorCategory::Unknown => "api_error",
+    }
+}
+
+/// F-3: every ErrorCategory maps to a wire-legal Gemini status.
+#[must_use]
+fn gemini_error_status(category: ErrorCategory) -> &'static str {
+    match category {
+        ErrorCategory::InvalidCredential => "UNAUTHENTICATED",
+        ErrorCategory::PermissionDenied => "PERMISSION_DENIED",
+        ErrorCategory::BillingOrQuota | ErrorCategory::RateLimited => "RESOURCE_EXHAUSTED",
+        ErrorCategory::ModelUnavailable => "NOT_FOUND",
+        ErrorCategory::InvalidRequest | ErrorCategory::ContextLimit => "INVALID_ARGUMENT",
+        ErrorCategory::Timeout => "DEADLINE_EXCEEDED",
+        ErrorCategory::ProviderUnavailable | ErrorCategory::TransportFailure => "UNAVAILABLE",
+        ErrorCategory::Unknown => "INTERNAL",
+    }
+}
+
+/// Family-faithful error envelope (F-1/F-3/F-4): upstream failures on
+/// same-protocol surfaces preserve the upstream status; gateway-local errors
+/// use family-legal names with our code in `shahid`.
+fn family_error_response(
+    surface: Surface,
     failure: &UpstreamFailure,
     alias: &str,
     exclusions: usize,
 ) -> Response {
-    let status = match failure.category {
-        ErrorCategory::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-        ErrorCategory::Timeout => StatusCode::GATEWAY_TIMEOUT,
-        _ => StatusCode::BAD_GATEWAY,
-    };
-    openai_error(
-        status,
-        failure.category_str(),
-        &failure.detail,
-        json!({
-            "category": failure.category_str(),
-            "upstream_status": failure.status,
-            "alias": alias,
-            "excluded_candidates": exclusions,
-        }),
-    )
+    // F-1: same-protocol upstream failures keep the upstream status — for
+    // 4xx/5xx only. Gateway-detected errors on a 2xx upstream response
+    // (malformed/oversized bodies) must NOT echo a success status.
+    let status = failure
+        .status
+        .filter(|s| !(100..=399).contains(s))
+        .and_then(|s| StatusCode::from_u16(s).ok())
+        .unwrap_or(match failure.category {
+            ErrorCategory::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            ErrorCategory::Timeout => StatusCode::GATEWAY_TIMEOUT,
+            _ => StatusCode::BAD_GATEWAY,
+        });
+    let extra = json!({
+        "category": failure.category_str(),
+        "upstream_status": failure.status,
+        "alias": alias,
+        "excluded_candidates": exclusions,
+    });
+    match surface {
+        Surface::OpenAiChat => openai_error(status, failure.category_str(), &failure.detail, extra),
+        Surface::AnthropicMessages => (
+            status,
+            Json(json!({
+                "type": "error",
+                "error": {
+                    "type": anthropic_error_type(failure.category),
+                    "message": failure.detail,
+                },
+                "shahid": {
+                    "code": failure.code.as_deref().unwrap_or(failure.category_str()),
+                    "extra": extra,
+                },
+            })),
+        )
+            .into_response(),
+        Surface::GeminiGenerateContent => (
+            status,
+            Json(json!({
+                "error": {
+                    "code": status.as_u16(),
+                    "message": failure.detail,
+                    "status": gemini_error_status(failure.category),
+                    "shahid": {
+                        "code": failure.code.as_deref().unwrap_or(failure.category_str()),
+                        "extra": extra,
+                    },
+                }
+            })),
+        )
+            .into_response(),
+    }
 }
 
-/// POST /v1/chat/completions (non-streaming).
-async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Response {
+/// Gateway-local error in the family's wire shape (F-4).
+fn family_local_error(
+    surface: Surface,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    extra: Value,
+) -> Response {
+    match surface {
+        Surface::OpenAiChat => openai_error(status, code, message, extra),
+        Surface::AnthropicMessages => (
+            status,
+            Json(json!({
+                "type": "error",
+                "error": { "type": "invalid_request_error", "message": message },
+                "shahid": { "code": code, "extra": extra },
+            })),
+        )
+            .into_response(),
+        Surface::GeminiGenerateContent => (
+            status,
+            Json(json!({
+                "error": {
+                    "code": status.as_u16(),
+                    "message": message,
+                    "status": "INVALID_ARGUMENT",
+                    "shahid": { "code": code, "extra": extra },
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /v1/chat/completions (non-streaming, Phase 3 surface).
+async fn chat_completions(
+    State(api): State<Arc<ApiDeps>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    process_chat(
+        api,
+        Surface::OpenAiChat,
+        None,
+        headers,
+        body,
+        Operation::Chat,
+    )
+    .await
+}
+
+/// POST /v1/messages (Phase 6, ADR-010): native Anthropic surface.
+async fn anthropic_messages(
+    State(api): State<Arc<ApiDeps>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    process_chat(
+        api,
+        Surface::AnthropicMessages,
+        None,
+        headers,
+        body,
+        Operation::Chat,
+    )
+    .await
+}
+
+/// POST /v1/messages/count_tokens (Phase 6, F-8): proxied for anthropic
+/// deployments; 501 for aliases without one (ADR-010).
+async fn anthropic_count_tokens(
+    State(api): State<Arc<ApiDeps>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    process_chat(
+        api,
+        Surface::AnthropicMessages,
+        None,
+        headers,
+        body,
+        Operation::CountTokens,
+    )
+    .await
+}
+
+/// POST /v1beta/models/{model_and_method} (Phase 6, F-10): the segment is
+/// `{alias}:generateContent` (decoded — the Path extractor decodes %3A).
+async fn gemini_generate(
+    State(api): State<Arc<ApiDeps>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(model_and_method): axum::extract::Path<String>,
+    query: axum::extract::RawQuery,
+    body: Bytes,
+) -> Response {
+    // F-9: the `?key=` auth form is rejected (tokens must never appear in
+    // URLs); the x-goog-api-key header is the only accepted form.
+    if query
+        .0
+        .as_deref()
+        .is_some_and(|q| q.split('&').any(|pair| pair.starts_with("key=")))
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": {
+                    "code": 401,
+                    "message": "query-parameter authentication is rejected; use the x-goog-api-key header",
+                    "status": "UNAUTHENTICATED",
+                    "shahid": { "code": "query_param_auth_rejected" }
+                }
+            })),
+        )
+            .into_response();
+    }
+    let Some((alias, method)) = model_and_method.rsplit_once(':') else {
+        return family_local_error(
+            Surface::GeminiGenerateContent,
+            StatusCode::NOT_FOUND,
+            "unknown_method",
+            "expected `{model}:generateContent`",
+            json!({}),
+        );
+    };
+    if method != "generateContent" {
+        if method == "streamGenerateContent" {
+            return family_local_error(
+                Surface::GeminiGenerateContent,
+                StatusCode::BAD_REQUEST,
+                "streaming_not_supported",
+                "streaming is not implemented yet (planned Phase 7)",
+                json!({}),
+            );
+        }
+        return family_local_error(
+            Surface::GeminiGenerateContent,
+            StatusCode::NOT_FOUND,
+            "unknown_method",
+            &format!("unknown Gemini method `{method}`"),
+            json!({}),
+        );
+    }
+    process_chat(
+        api,
+        Surface::GeminiGenerateContent,
+        Some(alias.to_string()),
+        headers,
+        body,
+        Operation::Chat,
+    )
+    .await
+}
+
+/// Per-family pre-validation (F-6): fails BEFORE routing so a malformed
+/// request never burns an upstream attempt or marks a credential degraded.
+fn validate_request(
+    surface: Surface,
+    operation: Operation,
+    parsed: &Value,
+) -> Result<(), (StatusCode, &'static str, String)> {
+    match surface {
+        Surface::OpenAiChat => {
+            if parsed.get("stream").and_then(Value::as_bool) == Some(true) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "streaming_not_supported",
+                    "streaming is not implemented yet (planned Phase 7)".to_string(),
+                ));
+            }
+            if parsed.get("model").and_then(Value::as_str).is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "model_required",
+                    "the `model` field (a configured alias) is required".to_string(),
+                ));
+            }
+        }
+        Surface::AnthropicMessages => {
+            if parsed.get("stream").and_then(Value::as_bool) == Some(true) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "streaming_not_supported",
+                    "streaming is not implemented yet (planned Phase 7)".to_string(),
+                ));
+            }
+            // F-8: count_tokens requires model + messages but NOT max_tokens.
+            let needs_max_tokens = operation == Operation::Chat;
+            if parsed.get("model").and_then(Value::as_str).is_none()
+                || parsed.get("messages").is_none()
+                || (needs_max_tokens && parsed.get("max_tokens").is_none())
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "anthropic requests require `model` and `messages` (chat also requires `max_tokens`)"
+                        .to_string(),
+                ));
+            }
+        }
+        Surface::GeminiGenerateContent => {
+            if parsed.get("contents").is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "contents_required",
+                    "gemini requests require `contents`".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Chat,
+    CountTokens,
+}
+
+/// Family-parameterized chat/count flow: validation, routing, rotation loop,
+/// per-family envelopes (Phase 6 refactor; behavior preserved per family).
+#[allow(clippy::too_many_lines)]
+async fn process_chat(
+    api: Arc<ApiDeps>,
+    surface: Surface,
+    path_model: Option<String>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+    operation: Operation,
+) -> Response {
     let started = Instant::now();
     let correlation = correlation_id();
 
     let parsed: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
-            return openai_error(
+            return family_local_error(
+                surface,
                 StatusCode::BAD_REQUEST,
                 "invalid_json",
                 &format!("request body is not valid JSON: {e}"),
@@ -162,27 +491,30 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
             );
         }
     };
-    if parsed.get("stream").and_then(Value::as_bool) == Some(true) {
-        return openai_error(
-            StatusCode::BAD_REQUEST,
-            "streaming_not_supported",
-            "streaming is not implemented yet (planned Phase 7)",
-            json!({}),
-        );
+    if let Err((status, code, message)) = validate_request(surface, operation, &parsed) {
+        return family_local_error(surface, status, code, &message, json!({}));
     }
-    let Some(alias) = parsed.get("model").and_then(Value::as_str) else {
-        return openai_error(
-            StatusCode::BAD_REQUEST,
-            "model_required",
-            "the `model` field (a configured alias) is required",
-            json!({}),
-        );
+    // F-9: Gemini clients may send `?key=` — that form is rejected (the
+    // token must never appear in URLs); the header form is the only auth.
+    let _ = &headers;
+    // Alias source: body `model` for OpenAI/Anthropic, path for Gemini.
+    let alias_owned: String = match (&surface, path_model) {
+        (Surface::GeminiGenerateContent, Some(m)) => m,
+        (Surface::OpenAiChat, None) | (Surface::AnthropicMessages, None) => parsed
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        (Surface::GeminiGenerateContent, None) => String::new(),
+        (_, Some(m)) => m,
     };
+    let alias: &str = &alias_owned;
 
     let (candidates, excluded) = match load_route_snapshot_detailed(&api.db, alias).await {
         Ok(pair) => pair,
         Err(e) => {
-            return openai_error(
+            return family_local_error(
+                surface,
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage_failure",
                 &format!("route snapshot unavailable: {e}"),
@@ -191,7 +523,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
         }
     };
     if candidates.is_empty() && excluded.is_empty() {
-        return openai_error(
+        return family_local_error(
+            surface,
             StatusCode::NOT_FOUND,
             "alias_not_found",
             &format!("no configured alias named `{alias}`"),
@@ -202,7 +535,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
     let policy = match api.db.repos().ensure_default_policy().await {
         Ok(p) => p,
         Err(e) => {
-            return openai_error(
+            return family_local_error(
+                surface,
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage_failure",
                 &format!("routing policy unavailable: {e}"),
@@ -215,7 +549,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
         "round_robin" => Strategy::RoundRobin,
         "weighted" => Strategy::Weighted,
         other => {
-            return openai_error(
+            return family_local_error(
+                surface,
                 StatusCode::NOT_IMPLEMENTED,
                 "strategy_not_implemented",
                 &format!("routing strategy `{other}` is declared but not implemented"),
@@ -227,7 +562,7 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
     let requirements = sair_domain::routing::CapabilityRequirements::derive_from_body(&parsed);
     let decision = match plan_route(
         alias,
-        sair_domain::protocol::ProtocolFamily::OpenAiChat,
+        surface.family(),
         strategy,
         requirements,
         &candidates,
@@ -249,12 +584,26 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
                     format!("strategy_{s}_not_implemented"),
                 ),
             };
+            // F-4/F-8: count_tokens on an alias without an anthropic
+            // deployment is a structured 501 (ADR-010).
+            if operation == Operation::CountTokens
+                && matches!(e, crate::routing::RouteError::NoEligibleDeployment)
+            {
+                return family_local_error(
+                    surface,
+                    StatusCode::NOT_IMPLEMENTED,
+                    "count_tokens_not_supported",
+                    "count_tokens is only available for aliases with anthropic deployments",
+                    json!({ "alias": alias }),
+                );
+            }
             // F-4: surface why every candidate was excluded (FR-012).
             let reasons: Vec<String> = excluded
                 .iter()
                 .map(|x| format!("{}: {}", x.deployment_id, x.reason))
                 .collect();
-            return openai_error(
+            return family_local_error(
+                surface,
                 status,
                 &code,
                 &e.to_string(),
@@ -346,30 +695,92 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
             .clone()
             .unwrap_or_else(|| candidate.base_url.clone());
 
-        // F-1: attribution headers are OpenRouter-only, per candidate
-        // dispatch. Never leaked to other providers.
-        let send_result = if candidate.provider_type == "openrouter" {
-            let extra = api.openrouter_attribution.headers();
-            send_chat_with_headers(
-                client,
-                &base,
-                &candidate.model_id,
-                &secret,
-                parsed.clone(),
-                Duration::from_millis(policy.timeout_ms.max(1) as u64),
-                &extra,
-            )
-            .await
-        } else {
-            send_chat(
-                client,
-                &base,
-                &candidate.model_id,
-                &secret,
-                parsed.clone(),
-                Duration::from_millis(policy.timeout_ms.max(1) as u64),
-            )
-            .await
+        let timeout = Duration::from_millis(policy.timeout_ms.max(1) as u64);
+        // Phase 6: per-surface adapter dispatch. OpenRouter attribution
+        // (F-1, Phase 5) applies only on the OpenAI surface to openrouter
+        // providers — never leaked elsewhere.
+        let send_result = match (surface, operation) {
+            (Surface::OpenAiChat, Operation::Chat) => {
+                if candidate.provider_type == "openrouter" {
+                    let extra = api.openrouter_attribution.headers();
+                    send_chat_with_headers(
+                        client,
+                        &base,
+                        &candidate.model_id,
+                        &secret,
+                        parsed.clone(),
+                        timeout,
+                        &extra,
+                    )
+                    .await
+                } else {
+                    send_chat(
+                        client,
+                        &base,
+                        &candidate.model_id,
+                        &secret,
+                        parsed.clone(),
+                        timeout,
+                    )
+                    .await
+                }
+            }
+            (Surface::AnthropicMessages, Operation::Chat) => {
+                // F-5: forward a validated client anthropic-version, else the
+                // pinned legacy default.
+                let version = headers
+                    .get("anthropic-version")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(sair_providers::anthropic::DEFAULT_ANTHROPIC_VERSION)
+                    .to_string();
+                sair_providers::anthropic::send_messages(
+                    client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    &version,
+                    parsed.clone(),
+                    timeout,
+                )
+                .await
+            }
+            (Surface::AnthropicMessages, Operation::CountTokens) => {
+                let version = headers
+                    .get("anthropic-version")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(sair_providers::anthropic::DEFAULT_ANTHROPIC_VERSION)
+                    .to_string();
+                sair_providers::anthropic::count_tokens(
+                    client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    &version,
+                    parsed.clone(),
+                    timeout,
+                )
+                .await
+            }
+            // count_tokens is defined only for the Anthropic surface
+            // (ADR-010); the count handler routes only AnthropicMessages,
+            // so this arm is defensive.
+            (Surface::OpenAiChat, Operation::CountTokens)
+            | (Surface::GeminiGenerateContent, Operation::CountTokens) => {
+                Err(UpstreamFailure::internal(
+                    "count_tokens is only supported on the anthropic surface",
+                ))
+            }
+            (Surface::GeminiGenerateContent, _) => {
+                sair_providers::gemini::generate_content(
+                    client,
+                    &base,
+                    &candidate.model_id,
+                    &secret,
+                    parsed.clone(),
+                    timeout,
+                )
+                .await
+            }
         };
         match send_result {
             Ok(ChatOutcome {
@@ -386,6 +797,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
                     .await;
                 record(
                     &api,
+                    surface,
+                    operation,
                     &correlation,
                     alias,
                     candidate,
@@ -481,6 +894,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
                     FailureAction::Stop => {
                         record(
                             &api,
+                            surface,
+                            operation,
                             &correlation,
                             alias,
                             candidate,
@@ -492,7 +907,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
                             &decision_json,
                         )
                         .await;
-                        return upstream_failure_response(
+                        return family_error_response(
+                            surface,
                             &failure,
                             alias,
                             decision.exclusions.len(),
@@ -505,20 +921,31 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
 
     // Rotation budget exhausted or rotation set exhausted.
     if let Some(failure) = last_failure {
-        record_failure_minimal(&api, &correlation, alias, &failure, &decision_json).await;
-        return upstream_failure_response(&failure, alias, decision.exclusions.len());
+        record_failure_minimal(
+            &api,
+            surface,
+            operation,
+            &correlation,
+            alias,
+            &failure,
+            &decision_json,
+        )
+        .await;
+        return family_error_response(surface, &failure, alias, decision.exclusions.len());
     }
     // R4-06: distinguish terminal states (actual upstream attempts, not
     // reserved credentials).
     if busy_skips > 0 && actual_attempts == 0 {
-        return openai_error(
+        return family_local_error(
+            surface,
             StatusCode::SERVICE_UNAVAILABLE,
             "deployment_busy",
             "every eligible deployment is at its concurrency bound",
             json!({ "alias": alias, "busy_deployments": busy_skips }),
         );
     }
-    openai_error(
+    family_local_error(
+        surface,
         StatusCode::SERVICE_UNAVAILABLE,
         "no_attempt_made",
         "routing produced no executable candidate",
@@ -534,6 +961,8 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
 #[allow(clippy::too_many_arguments)]
 async fn record(
     api: &ApiDeps,
+    surface: Surface,
+    operation: Operation,
     correlation: &str,
     alias: &str,
     candidate: &sair_domain::routing::RouteCandidate,
@@ -548,8 +977,14 @@ async fn record(
         id: correlation.to_string(),
         ts: sair_persistence::time::now_iso(),
         correlation_id: correlation.to_string(),
-        protocol_family: Some("openai_chat".to_string()),
-        operation: Some("chat_completions".to_string()),
+        protocol_family: Some(surface.label().to_string()),
+        operation: Some(
+            match operation {
+                Operation::Chat => "chat",
+                Operation::CountTokens => "count_tokens",
+            }
+            .to_string(),
+        ),
         alias: Some(alias.to_string()),
         deployment_id: Some(candidate.deployment_id.clone()),
         credential_id: Some(candidate.credential_id.clone()),
@@ -570,6 +1005,8 @@ async fn record(
 
 async fn record_failure_minimal(
     api: &ApiDeps,
+    surface: Surface,
+    operation: Operation,
     correlation: &str,
     alias: &str,
     failure: &UpstreamFailure,
@@ -579,8 +1016,14 @@ async fn record_failure_minimal(
         id: correlation.to_string(),
         ts: sair_persistence::time::now_iso(),
         correlation_id: correlation.to_string(),
-        protocol_family: Some("openai_chat".to_string()),
-        operation: Some("chat_completions".to_string()),
+        protocol_family: Some(surface.label().to_string()),
+        operation: Some(
+            match operation {
+                Operation::Chat => "chat",
+                Operation::CountTokens => "count_tokens",
+            }
+            .to_string(),
+        ),
         alias: Some(alias.to_string()),
         error_category: Some(failure.category_str().to_string()),
         decision_json: decision_json.clone(),
@@ -815,7 +1258,8 @@ mod tests {
             json!({"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}),
         )
         .await;
-        assert_eq!(response.status(), 502);
+        // F-1: same-protocol upstream status is preserved (upstream 401).
+        assert_eq!(response.status(), 401);
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["error"]["shahid"]["category"], "invalid_credential");
 
@@ -849,7 +1293,8 @@ mod tests {
             json!({"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}),
         )
         .await;
-        assert_eq!(response.status(), 502);
+        // F-1: upstream 429 preserved; quota-truth classification in shahid.
+        assert_eq!(response.status(), 429);
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["error"]["shahid"]["category"], "billing_or_quota");
         handle.stop(Duration::from_secs(2)).await.unwrap();

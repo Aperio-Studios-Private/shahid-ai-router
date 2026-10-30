@@ -79,6 +79,18 @@ impl CapabilityRequirements {
         {
             requirements.structured_output = true;
         }
+        // Phase 6 (F-6): Gemini structured-output signals.
+        let generation_config = body.get("generationConfig");
+        if generation_config
+            .and_then(|g| g.get("responseMimeType"))
+            .and_then(Value::as_str)
+            == Some("application/json")
+            || generation_config
+                .and_then(|g| g.get("responseSchema"))
+                .is_some()
+        {
+            requirements.structured_output = true;
+        }
         requirements
     }
 

@@ -258,7 +258,8 @@ mod rotation_tests {
             json!({"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}),
         )
         .await;
-        assert_eq!(response.status(), 502);
+        // F-1: upstream 429 preserved.
+        assert_eq!(response.status(), 429);
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["error"]["shahid"]["category"], "billing_or_quota");
 
