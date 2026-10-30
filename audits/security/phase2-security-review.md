@@ -2,6 +2,11 @@
 
 Reviewer: independent security reviewer (did not author the code). Date: 2026-10-31.
 Code under review: commit `f86be40` ("feat(phase-2): security & persistence").
+
+> **Retest status (2026-10-31):** fixes retested against commit `8886aa9` — see the
+> **Retest** section at the end of this file. Both High findings are **FIXED** and
+> tested; SEC2-04 is PARTIAL (residual scope reduced to Low). Final verdict:
+> **PASS WITH FINDINGS** (Low residuals and Phase 3 watch items only).
 Inputs: docs/06 (incl. Phase 2 threat-model addendum), .agent/SECURITY_RULES.md, .agent/QUALITY_GATES.md, docs/DECISION_LOG.md ADR-004/005/006/011/015/016, audits/planning/phase2-plan.md (§Review resolution), audits/planning/phase2-plan-review.md (F-1…F-12).
 
 ## Method and verification performed
@@ -241,9 +246,53 @@ The phase delivers real, tested security value — the auth/Host/limit stack, th
 3. **SEC2-03 (Medium)** — install a hyper Timer / header-read timeout and add the missing slow-headers negative test (promised by F-1).
 4. **SEC2-04 (Medium)** — surface degraded-start failures in the UI error state (promised by the threat-model addendum).
 
-**VERDICT: PASS WITH FINDINGS**
+**VERDICT: PASS WITH FINDINGS** (first review — superseded by the retest verdict at the end of this file)
 
-Open Critical items: none.
-Open High items: SEC2-01 (SSRF literal-IP bypass + unwired scheme policy), SEC2-02 (token regeneration not applied to the running gateway).
+Open High items at first review: SEC2-01 (SSRF literal-IP bypass + unwired scheme policy), SEC2-02 (token regeneration not applied to the running gateway). Both were retested against commit `8886aa9` and are FIXED — see the Retest section below for the per-finding disposition and the final verdict.
 
-These two High findings block the phase-2 exit criterion ("security review completed with no open Critical/High") until resolved; SEC2-03/SEC2-04 should be fixed in this phase or explicitly escalated with a recorded decision.
+---
+
+## Retest (2026-10-31) — commit `8886aa9` ("fix(security): resolve SEC2-01..09 from independent phase-2 review")
+
+Reviewer: same independent reviewer. Method: read every changed file in full (`crates/sair-providers/src/http.rs`, `crates/sair-gateway/src/{lib,handle}.rs`, `apps/desktop/src-tauri/src/{state,lib,telemetry}.rs`, `.github/workflows/ci.yml`, manifests), then re-ran the suite on this Windows machine: `cargo test --workspace` → **61 passed / 0 failed** (gateway 21, providers 10, vault 8 — including the live OS Credential Manager contract, persistence 13, domain 5, app 4), `cargo clippy --workspace --all-targets -- -D warnings` → clean. The five new security tests were confirmed executing by name (listed per finding below). Files were not modified except this report.
+
+### Per-finding disposition
+
+**SEC2-01 (High, SSRF) — FIXED.**
+`build_client`/`build_client_with_timeout` now return an opaque `SsrfCheckedClient` (http.rs:243-319) whose only request entry point, `request(method, url)`, runs `SsrfPolicy::validate_url` (scheme) **and** an IP-literal `is_allowed` check per call (http.rs:305-318) before handing out a `RequestBuilder`. The inner `reqwest::Client` field is private and there is no raw-client accessor, so the hyper-util literal-IP resolver bypass (the original finding) can no longer be reached through this crate's public surface: literal and scheme enforcement now happens at the request boundary where it always executes, exactly as recommended. The hostname path retains the `ValidatingResolver` per-resolved-address check, and the redirect policy (no cross-host/scheme, ≤3 hops) is unchanged, so redirect hops stay covered (same-host hops reuse the already-validated host; cross-host hops are stopped).
+New test `checked_client_blocks_literal_and_scheme_violations` (http.rs:487-548) exercises the real `build_client` boundary: blocks `https://169.254.169.254/...` and `https://10.0.0.5/...` with `AddressBlocked`, blocks `http://api.example.com` with `SchemeBlocked`, admits public literal + public hostname, and scopes the loopback opt-in correctly (`http://127.0.0.1` allowed, `http://10.0.0.1` blocked). Passes. ADR-015's claim is now true as implemented — the resolver covers hostnames and the wrapper covers everything.
+*Watch item for Phase 3 (not a defect):* the sanctioned boundary is by-construction in this crate, but `reqwest` remains a direct dependency, so adapters must be reviewed at P3-T02 to receive only `SsrfCheckedClient` and never construct their own client. Record that rule in ADR-015/docs/04 when adapters land.
+
+**SEC2-02 (High, token lifecycle) — FIXED.**
+`GatewayRuntimeState.expected_token` is now `Arc<tokio::sync::RwLock<Arc<Vec<u8>>>>` (gateway lib.rs:54-58); `token_auth` reads the current value per request (lib.rs:190); `GatewayHandle` holds the same Arc and `update_token` swaps it live (handle.rs:166-169). `regenerate_token` (state.rs:117-145) now: create new vault item → persist ref → **hot-swap the running gateway** → delete old item — the swap happens before the old vault item is deleted, so a crash between steps never leaves a tokenless gateway, and the old token is revoked for every subsequent request without a restart. Test `update_token_hot_swaps_without_restart` (handle.rs:376-412) proves old token → 401 and new token → 200 after the swap on a live server. The UI warning text ("existing clients will stop working") is now accurate.
+*Minor residual (Low):* if the DB `set_setting` inside `regenerate_token` fails, the in-memory `token_ref` has already been swapped while the DB keeps the old ref; the command returns Err (visible to the UI), the gateway keeps the old token (which the DB ref still names — consistent after restart or a successful retry), but `reveal_token` would return the new token in that window. Consider rolling back the in-memory swap on DB failure.
+
+**SEC2-03 (Medium, slowloris) — FIXED.**
+The gateway no longer uses `axum::serve`; it runs a manual accept loop with `hyper_util::server::conn::auto::Builder` and per connection `.http1().timer(TokioTimer::new()).header_read_timeout(header_timeout)` (handle.rs:98-127). `GatewayConfig.header_timeout_ms` defaults to 10 s, is floored at use (`handle.rs:95`) and at settings load (≥1000 ms, state.rs:244-249) — the Timer requirement identified in the original finding is satisfied, so the header-read timeout actually takes effect. The tower `TimeoutLayer` continues to bound post-header processing (408, tested), so both phases of a request are now budgeted. Test `slowloris_partial_headers_are_dropped` (handle.rs:429-458) opens a raw TCP connection, sends half a request line, and asserts the server closes/408s within 5 s at a 500 ms header timeout — a genuine through-hyper negative test, and it passes. Verified empirically: the full suite including graceful-drain tests remains green with the new server loop.
+
+**SEC2-04 (Medium, degraded-start transparency) — PARTIAL (residual now Low).**
+The token/vault failure path — the primary degraded-start scenario in the docs/06 addendum — is fixed: `init_backend` calls `state.set_gateway_error(...)` (app lib.rs:105-109, state.rs:254-260), so the UI shows an explicit error instead of a bare "Stopped", and `start_gateway` failures continue to set it (state.rs:174-177).
+*Remaining gap:* DB-open and migration failures (app lib.rs:73-86) still return Err **before** `AppState` is managed, so there is nothing to record the error in — those failures remain log-only. Narrower than the original finding (the failure also disables all persistence), but the addendum's "vault or DB unavailable at startup → explicit error state surfaced in the UI" is only half-true. Fix by managing an `AppState` (with an optional/errored DB) before the DB step, or by recording the init failure in a separate always-managed state object. Escalated as a Low item for the Phase 3/9 UI work; not blocking.
+
+**SEC2-05 (Medium, resolution gaps) — FIXED.**
+File-writer sweep: `file_sink_contains_no_secret_material` (telemetry.rs) now writes through a real file sink and reads the file back from disk, asserting no seeded key material and correct redaction — closes the F-11 gap. Chunked oversized body: `chunked_oversized_body_rejected` (handle.rs:463-489) sends a raw chunked body over the limit on a raw socket and asserts 413 — closes the F-2 gap. Both pass.
+
+**SEC2-06 (Low, CI least privilege) — FIXED.** `.github/workflows/ci.yml` now carries top-level `permissions: contents: read`.
+
+**SEC2-07 (Low, empty token) — FIXED.** `GatewayHandle::start` rejects an empty token with `GatewayError::Token` before binding (handle.rs:69-74, fail-closed at the boundary — the verified_token empty==empty path is now unreachable for a running gateway), `update_token` asserts non-empty, and app-side `gateway_config` builds only from vault-loaded tokens. Test `empty_token_is_rejected_fail_closed` passes.
+
+**SEC2-08 (Low, exit panic) — FIXED.** The `RunEvent::Exit` hook uses `app_handle.try_state::<AppState>()` (app lib.rs:60-66); no panic when backend init never managed the state.
+
+**SEC2-09 (Low, settings floors) — FIXED.** `gateway_config` now rejects `body_limit_bytes`/`concurrency` < 1 and floors `timeout_ms`/`header_timeout_ms` at 1000 ms (state.rs:225-249); port validation unchanged. Zero-value brick configs are no longer possible.
+
+**SEC2-10/11/12/13 (Low/Informational) — unchanged by this commit** (redaction substring matching, doc-comment ordering note, Bearer case-sensitivity, misc hardening notes). These remain as recorded; none blocks.
+
+### F-9 drain-caller justification — ACCEPTED ON ITS MERITS
+
+The implementation keeps `RunEvent::Exit` instead of the review's suggested `RunEvent::ExitRequested`. The submitted justification is sound: `ExitRequested` fires when exit is *requested* and can be declined/prevented (windows may veto close); draining there could stop the gateway while the application keeps running — tearing down a live service contrary to user intent. `RunEvent::Exit` fires at actual loop termination, cannot be vetoed, and is the correct last-chance drain point. The substantive F-9 requirement ("name the Tauri exit hook that triggers drain") is met, and the deviation is now an improvement over the original resolution text. Recorded residual (inherent to ADR-003's in-process gateway, not new): hard kill or process crash bypasses any drain hook on either event.
+
+### Retest verdict
+
+Both High findings are fixed with regression tests through the real boundary (reqwest client wrapper; live-server token swap). All committed Medium/Low fixes verified in source and by test execution on Windows; the only open item is the narrowed SEC2-04 residual (Low, escalated). No Critical or High findings remain open.
+
+**VERDICT: PASS WITH FINDINGS** — open items are Low only (SEC2-04 partial: DB/migration degraded-start errors still log-only; SEC2-02 DB-failure ref divergence residual) plus Phase 3 watch items (adapter client discipline per SEC2-01; ADR-015 amendment to record the wrapper boundary). Nothing blocks the phase-2 gate.

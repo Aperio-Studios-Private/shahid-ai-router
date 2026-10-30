@@ -94,7 +94,7 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Status: Accepted. Date: 2026-10-31 (per Phase 2 review finding F-3; supersedes the connector-rewrite wording in ADR-011).
 - Context: reqwest 0.13 has no full connector replacement; rewriting the connect target to a validated IP breaks TLS SNI/certificate identity, and weakening verification is forbidden (SECURITY_RULES #6).
 - Decision: enforce SSRF policy in a custom `Resolve` implementation so resolution and validation happen together and only validated addresses are returned (reqwest connects exactly to resolver output — TOCTOU window minimized while TLS identity stays on the hostname). Redirects governed by `redirect::Policy::custom` (stop on host/scheme change, ≤3 same-host hops). Scheme policy and extended denylist live in `SsrfPolicy` (multicast/reserved/NAT64/6to4 added; default-deny unclassified).
-- Consequences: a residual resolve-to-connect race remains in the platform resolver path — documented, revalidated at Phase 11 security review.
+- Consequences: a residual resolve-to-connect race remains in the platform resolver path — documented, revalidated at Phase 11 security review. **Phase 3 rule (from security re-verification, 2026-10-31):** adapters must receive only `SsrfCheckedClient` (which enforces scheme + IP-literal policy per request — hyper-util short-circuits literals before any resolver); the raw reqwest client is never exposed. Enforced by construction at P3-T02.
 - Revisit trigger: reqwest providing first-class validated-connect APIs.
 
 ## ADR-016: Vault contract-test evidence policy
