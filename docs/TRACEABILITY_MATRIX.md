@@ -11,7 +11,7 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 | FR-003 | Model catalogue | 3 | P3-T02 (repos) + P3-T05 (UI) | reports/phase-reports/phase-3.md | Implemented |
 | FR-004 | Virtual aliases (same-protocol, ADR-009) | 3-5 | P3-T03/T05 + P5 (capability matrix) | reports/phase-reports/phase-5.md | Implemented (priority/rr/weighted; lru/pin 501) |
 | FR-005 | Local gateway (loopback + auth) | 3 | P3-T04 (middleware: P2-T03) | reports/phase-reports/phase-2.md | Implemented (middleware + lifecycle; protocol surfaces Phase 3) |
-| FR-006 | Protocol surfaces (ADR-010 scope) | 3,6 | P3-T04 (openai), Phase 6 (anthropic/gemini) | reports/phase-reports/phase-3.md | In progress |
+| FR-006 | Protocol surfaces (ADR-010 scope) | 3,6 | P3-T04 + P6 (anthropic/gemini) | reports/phase-reports/phase-6.md | Implemented (streaming Phase 7) |
 | FR-007 | Capability-aware routing | 3-5 | P3-T03 + P5 (request-derived requirements) | reports/phase-reports/phase-5.md | Implemented (vision heuristic deferred) |
 | FR-008 | Rotation | 4 | P3-T03/T04 + P4 (account grouping) | reports/phase-reports/phase-4.md | Implemented |
 | FR-009 | Retry/failover | 4 | P3-T04 (ADR-017 semantics) | reports/phase-reports/phase-3.md | Implemented (v0) |
