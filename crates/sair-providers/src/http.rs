@@ -233,7 +233,14 @@ impl reqwest::dns::Resolve for ValidatingResolver {
 
 /// Builds an outbound client with the validating resolver and the
 /// no-cross-origin redirect policy.
-pub fn build_client(policy: SsrfPolicy) -> reqwest::Client {
+///
+/// Returns [`SsrfCheckedClient`], not the raw client: hyper-util
+/// short-circuits IP-literal authorities before invoking the custom
+/// resolver, so literal and scheme enforcement must happen per request at
+/// this boundary (security review finding SEC2-01). Adapters never receive
+/// the raw client.
+#[must_use]
+pub fn build_client(policy: SsrfPolicy) -> SsrfCheckedClient {
     build_client_with_timeout(policy, std::time::Duration::from_secs(120))
 }
 
@@ -242,8 +249,9 @@ pub fn build_client(policy: SsrfPolicy) -> reqwest::Client {
 pub fn build_client_with_timeout(
     policy: SsrfPolicy,
     timeout: std::time::Duration,
-) -> reqwest::Client {
-    reqwest::Client::builder()
+) -> SsrfCheckedClient {
+    let redirect_policy = policy.clone();
+    let inner = reqwest::Client::builder()
         .dns_resolver(Arc::new(ValidatingResolver::new(policy.clone())))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             let max_hops = 3;
@@ -255,8 +263,12 @@ pub fn build_client_with_timeout(
             };
             let prev_host = prev.host_str().unwrap_or_default();
             let next_host = attempt.url().host_str().unwrap_or_default();
-            if policy.redirect_allowed(prev_host, prev.scheme(), next_host, attempt.url().scheme())
-            {
+            if redirect_policy.redirect_allowed(
+                prev_host,
+                prev.scheme(),
+                next_host,
+                attempt.url().scheme(),
+            ) {
                 attempt.follow()
             } else {
                 // Returns the redirect response to the caller; adapters
@@ -266,12 +278,49 @@ pub fn build_client_with_timeout(
         }))
         .timeout(timeout)
         .build()
-        .expect("outbound client must build; static policy and resolver only")
+        .expect("outbound client must build; static policy and resolver only");
+    SsrfCheckedClient {
+        client: inner,
+        policy,
+    }
+}
+
+/// A reqwest client that enforces the [`SsrfPolicy`] on every target URL
+/// before a request is built: scheme rules (HTTPS default; HTTP only for
+/// explicit loopback literals) and IP-literal denylist checks. Hostname
+/// targets are additionally validated per resolved address by the
+/// [`ValidatingResolver`] inside the connection layer.
+#[derive(Clone)]
+pub struct SsrfCheckedClient {
+    client: reqwest::Client,
+    policy: SsrfPolicy,
+}
+
+impl SsrfCheckedClient {
+    /// Validates the target and returns a request builder.
+    ///
+    /// # Errors
+    /// [`SsrfError::SchemeBlocked`] for disallowed schemes,
+    /// [`SsrfError::AddressBlocked`] for blocked IP-literal hosts.
+    pub fn request(
+        &self,
+        method: reqwest::Method,
+        url: url::Url,
+    ) -> Result<reqwest::RequestBuilder, SsrfError> {
+        self.policy.validate_url(&url)?;
+        if let Some(host) = url.host_str()
+            && let Ok(ip) = host.parse::<IpAddr>()
+            && !self.policy.is_allowed(ip)
+        {
+            return Err(SsrfError::AddressBlocked(ip));
+        }
+        Ok(self.client.request(method, url))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AddressSource, SsrfError, SsrfPolicy, ValidatingResolver};
+    use super::{AddressSource, SsrfError, SsrfPolicy, ValidatingResolver, build_client};
     use std::net::{IpAddr, SocketAddr};
 
     fn ip(s: &str) -> IpAddr {
@@ -429,5 +478,72 @@ mod tests {
 
         let relaxed = ValidatingResolver::new(SsrfPolicy::allow_loopback());
         assert!(relaxed.validate_host("127.0.0.1", 8080).is_ok());
+    }
+
+    /// SEC2-01: IP-literal URLs never reach the resolver (hyper-util
+    /// short-circuits literals), so the client wrapper must enforce the
+    /// policy per request. This is the boundary adapters use.
+    #[test]
+    fn checked_client_blocks_literal_and_scheme_violations() {
+        // Client construction requires an installed rustls provider (ADR-006).
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = build_client(SsrfPolicy::default());
+
+        // Metadata + private literals blocked at the request boundary.
+        for literal in [
+            "https://169.254.169.254/latest/meta-data",
+            "https://10.0.0.5/v1",
+        ] {
+            let err = client
+                .request(reqwest::Method::GET, url::Url::parse(literal).unwrap())
+                .unwrap_err();
+            assert!(matches!(err, SsrfError::AddressBlocked(_)), "{literal}");
+        }
+        // Scheme violations blocked (also covers the no-production-caller
+        // concern for validate_url).
+        let err = client
+            .request(
+                reqwest::Method::GET,
+                url::Url::parse("http://api.example.com/v1").unwrap(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, SsrfError::SchemeBlocked(_)));
+
+        // Public literal and public hostname pass validation.
+        assert!(
+            client
+                .request(
+                    reqwest::Method::GET,
+                    url::Url::parse("https://8.8.8.8/dns-query").unwrap()
+                )
+                .is_ok()
+        );
+        assert!(
+            client
+                .request(
+                    reqwest::Method::GET,
+                    url::Url::parse("https://api.example.com/v1").unwrap()
+                )
+                .is_ok()
+        );
+
+        // Loopback opt-in admits only loopback literals over http.
+        let local = build_client(SsrfPolicy::allow_loopback());
+        assert!(
+            local
+                .request(
+                    reqwest::Method::GET,
+                    url::Url::parse("http://127.0.0.1:11434/v1").unwrap()
+                )
+                .is_ok()
+        );
+        assert!(
+            local
+                .request(
+                    reqwest::Method::GET,
+                    url::Url::parse("http://10.0.0.1:11434/v1").unwrap()
+                )
+                .is_err()
+        );
     }
 }

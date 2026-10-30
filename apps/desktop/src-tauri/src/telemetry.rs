@@ -292,6 +292,36 @@ mod tests {
         assert!(!out.contains("[REDACTED]"));
     }
 
+    /// F-11/SEC2-05: the on-disk file sink path (not just the in-memory
+    /// writer) must contain no secret material.
+    #[test]
+    fn file_sink_contains_no_secret_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sweep.log");
+        let sink = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let subscriber = tracing_subscriber::registry().with(
+            fmt::layer()
+                .event_format(RedactingFormatter)
+                .with_writer(std::sync::Mutex::new(sink))
+                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(api_key = "sk-file-SECRETVALUE9", provider = "mock", "call");
+        });
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.contains("SECRETVALUE9"),
+            "secret reached the file sink: {contents}"
+        );
+        assert!(contents.contains("provider=mock"));
+        assert!(contents.contains("[REDACTED]"));
+    }
+
     /// F-10: the token-reveal path must never log the token value. Runs the
     /// real AppState.ensure_token flow against the in-memory store and a
     /// memory DB while capturing logs.

@@ -47,19 +47,29 @@ pub enum GatewayError {
     Token(String),
 }
 
-/// Per-router runtime state shared with middleware.
+/// Per-router runtime state shared with middleware. The expected token is
+/// behind a lock so `GatewayHandle::update_token` hot-swaps it without a
+/// restart (security review finding SEC2-02: rotation must revoke the old
+/// token immediately).
 #[derive(Clone)]
 pub struct GatewayRuntimeState {
-    expected_token: Arc<Vec<u8>>,
+    expected_token: Arc<tokio::sync::RwLock<Arc<Vec<u8>>>>,
     permits: Arc<tokio::sync::Semaphore>,
 }
 
 /// Builds the public router with the full middleware stack.
 pub fn router(config: &GatewayConfig) -> Router {
     let state = GatewayRuntimeState {
-        expected_token: config.token.clone(),
+        expected_token: Arc::new(tokio::sync::RwLock::new(config.token.clone())),
         permits: Arc::new(tokio::sync::Semaphore::new(config.concurrency)),
     };
+    router_with_state(config, state)
+}
+
+/// Builds the router around an externally owned token lock so
+/// [`GatewayHandle::update_token`] hot-swaps the live router's expectation
+/// (SEC2-02).
+pub(crate) fn router_with_state(config: &GatewayConfig, state: GatewayRuntimeState) -> Router {
     // axum applies layers outermost-last: the first `.layer` added is the
     // innermost. Request order = reverse of the order below.
     let router = Router::new()
@@ -168,7 +178,8 @@ fn is_allowed_host(host: &str) -> bool {
     )
 }
 
-/// Token auth: Bearer / x-api-key / x-goog-api-key, constant-time compare.
+/// Token auth: Bearer / x-api-key / x-goog-api-key, constant-time compare
+/// against the current token (hot-swappable without restart, SEC2-02).
 async fn token_auth(
     State(state): State<GatewayRuntimeState>,
     headers: HeaderMap,
@@ -176,7 +187,8 @@ async fn token_auth(
     next: Next,
 ) -> Response {
     let provided = extract_token(&headers);
-    if token::verify_token(provided, &state.expected_token) {
+    let expected = state.expected_token.read().await.clone();
+    if token::verify_token(provided, &expected) {
         next.run(req).await
     } else {
         (

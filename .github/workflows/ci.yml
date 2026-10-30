@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
 
+# Least privilege (security review SEC2-06): read-only token by default.
+permissions:
+  contents: read
+
 # Windows + macOS matrix per ADR-013. Linux is not a supported platform for v1.
 jobs:
   rust:

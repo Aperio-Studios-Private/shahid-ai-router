@@ -108,8 +108,9 @@ impl AppState {
         Ok(material.value)
     }
 
-    /// Regenerates the token: create new item → swap persisted ref → delete
-    /// old item (F-10 order). Returns the new encoded token once.
+    /// Regenerates the token: create new item → persist ref → hot-swap the
+    /// running gateway (SEC2-02: old token revoked immediately, no restart)
+    /// → delete old item (F-10 order). Returns the new encoded token once.
     ///
     /// # Errors
     /// Returns an error message when the vault or DB fails.
@@ -128,6 +129,11 @@ impl AppState {
             )
             .await
             .map_err(|e| format!("db unavailable: {e}"))?;
+        // Hot-swap the live gateway before deleting the old vault item so a
+        // crash between the steps never leaves a tokenless gateway.
+        if let Some(handle) = self.gateway.read().await.as_ref() {
+            handle.update_token(material.value.clone()).await;
+        }
         if let Some(old_ref) = previous {
             // Best-effort cleanup; a leftover old item is harmless (no ref
             // points at it) and is reported for diagnostics.
@@ -220,18 +226,37 @@ impl AppState {
                 .get("body_limit_bytes")
                 .and_then(serde_json::Value::as_u64)
             {
-                config.body_limit_bytes =
-                    usize::try_from(limit).map_err(|_| "invalid body_limit_bytes".to_string())?;
+                // Floor 1: a zero limit must not disable the bound (SEC2-09).
+                config.body_limit_bytes = usize::try_from(limit)
+                    .ok()
+                    .filter(|v| *v >= 1)
+                    .ok_or_else(|| "invalid body_limit_bytes".to_string())?;
             }
             if let Some(concurrency) = obj.get("concurrency").and_then(serde_json::Value::as_u64) {
-                config.concurrency =
-                    usize::try_from(concurrency).map_err(|_| "invalid concurrency".to_string())?;
+                config.concurrency = usize::try_from(concurrency)
+                    .ok()
+                    .filter(|v| *v >= 1)
+                    .ok_or_else(|| "invalid concurrency".to_string())?;
             }
             if let Some(timeout) = obj.get("timeout_ms").and_then(serde_json::Value::as_u64) {
-                config.timeout_ms = timeout;
+                config.timeout_ms = timeout.max(1_000);
+            }
+            if let Some(header_timeout) = obj
+                .get("header_timeout_ms")
+                .and_then(serde_json::Value::as_u64)
+            {
+                config.header_timeout_ms = header_timeout.max(1_000);
             }
         }
         Ok(config)
+    }
+
+    /// Records a degraded-start failure so the UI shows an explicit error
+    /// instead of a bare "Stopped" (SEC2-04).
+    pub fn set_gateway_error(&self, error: String) {
+        if let Ok(mut guard) = self.gateway_error.try_write() {
+            *guard = Some(error);
+        }
     }
 }
 

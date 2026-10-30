@@ -16,6 +16,7 @@ url = "2"
 
 [dev-dependencies]
 tokio = { workspace = true }
+rustls = { workspace = true }
 
 [lints]
 workspace = true

@@ -55,9 +55,11 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
                 // FR-017: drain in-flight gateway requests before exit.
-                let state = app_handle.state::<AppState>();
-                if let Err(err) =
-                    tauri::async_runtime::block_on(state.stop_gateway(Duration::from_secs(3)))
+                // try_state guards the failure path where backend init never
+                // managed the state (SEC2-08: no panic at exit).
+                if let Some(state) = app_handle.try_state::<AppState>()
+                    && let Err(err) =
+                        tauri::async_runtime::block_on(state.stop_gateway(Duration::from_secs(3)))
                 {
                     tracing::warn!(error = %err, "gateway drain on exit did not finish cleanly");
                 }
@@ -96,20 +98,18 @@ async fn init_backend(app: tauri::AppHandle) -> Result<(), String> {
     app.manage(AppState::new(db, Arc::new(OsSecretStore::new())));
 
     // Ensure the token exists and start the gateway. Failures leave the
-    // gateway stopped with an explicit error (degraded start, docs/06).
+    // gateway stopped with an explicit, UI-visible error state (degraded
+    // start, docs/06; security review SEC2-04: failures must not be
+    // log-only).
     let state = app.state::<AppState>();
     if let Err(err) = state.ensure_token().await {
         tracing::error!(error = %err, "gateway token unavailable; gateway will not start");
+        state.set_gateway_error(format!("gateway token unavailable: {err}"));
         return Err(err);
     }
-    state
-        .start_gateway()
-        .await
-        .map(|view| {
-            tracing::info!(addr = ?view.addr, "gateway auto-started");
-        })
-        .map_err(|e| {
-            tracing::error!(error = %e, "gateway auto-start failed");
-            e
-        })
+    if let Err(err) = state.start_gateway().await {
+        tracing::error!(error = %err, "gateway auto-start failed");
+        return Err(err);
+    }
+    Ok(())
 }

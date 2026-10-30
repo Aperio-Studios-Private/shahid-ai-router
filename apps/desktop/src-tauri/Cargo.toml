@@ -29,6 +29,7 @@ rustls = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 sair-vault = { workspace = true, features = ["mock"] }
 
 [lints]

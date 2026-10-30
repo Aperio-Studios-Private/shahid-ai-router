@@ -1,23 +1,30 @@
-//! Gateway lifecycle handle (FR-015/FR-017/FR-018, review finding F-9).
+//! Gateway lifecycle handle (FR-015/FR-017/FR-018, review findings F-9/F-1,
+//! security review findings SEC2-02/SEC2-03).
 //!
-//! `start` binds `127.0.0.1:<port>` only and surfaces bind failures as an
-//! explicit error (no fallback port). `stop(grace)` drains in-flight
-//! requests via axum's graceful shutdown; if the grace period elapses the
-//! task is aborted, which is the bounded-termination guarantee.
+//! `start` binds `127.0.0.1:<port>` only, rejects an empty token (fail-closed,
+//! SEC2-07), and surfaces bind failures as an explicit error (no fallback
+//! port). Connections are served by hyper-util with a header-read timeout and
+//! timer so slowloris partial-header clients are dropped (SEC2-03).
+//! `stop(grace)` drains in-flight requests within the grace; elapsing aborts
+//! the server (bounded termination). `update_token` hot-swaps the expected
+//! token without a restart so rotation revokes the old token immediately
+//! (SEC2-02).
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use crate::GatewayError;
-use crate::router;
 
 /// Runtime configuration for one gateway instance.
 #[derive(Clone)]
 pub struct GatewayConfig {
-    /// The expected gateway token (from the OS vault).
-    pub token: std::sync::Arc<Vec<u8>>,
+    /// The expected gateway token (from the OS vault). Must be non-empty.
+    pub token: Arc<Vec<u8>>,
     /// Loopback port (FR-005).
     pub port: u16,
     /// Request body size budget in bytes (default 32 MiB).
@@ -26,16 +33,19 @@ pub struct GatewayConfig {
     pub concurrency: usize,
     /// Per-request timeout budget in ms (F-1); exceeded → 408.
     pub timeout_ms: u64,
+    /// Per-connection header-read timeout in ms; slowloris bound (SEC2-03).
+    pub header_timeout_ms: u64,
 }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            token: std::sync::Arc::new(Vec::new()),
+            token: Arc::new(Vec::new()),
             port: 8787,
             body_limit_bytes: 32 * 1024 * 1024,
             concurrency: 16,
             timeout_ms: 120_000,
+            header_timeout_ms: 10_000,
         }
     }
 }
@@ -46,6 +56,7 @@ pub struct GatewayHandle {
     addr: std::net::SocketAddr,
     task: JoinHandle<()>,
     shutdown: watch::Sender<bool>,
+    token: Arc<tokio::sync::RwLock<Arc<Vec<u8>>>>,
 }
 
 impl GatewayHandle {
@@ -53,8 +64,14 @@ impl GatewayHandle {
     ///
     /// # Errors
     /// [`GatewayError::Bind`] when the port cannot be bound (FR-018: no
-    /// fallback port is attempted).
+    /// fallback port is attempted); [`GatewayError::Token`] when the token
+    /// is empty (SEC2-07: an empty token must never authenticate).
     pub async fn start(config: GatewayConfig) -> Result<Self, GatewayError> {
+        if config.token.is_empty() {
+            return Err(GatewayError::Token(
+                "gateway token must be non-empty (fail-closed, SEC2-07)".to_string(),
+            ));
+        }
         let bind_addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
         let listener = tokio::net::TcpListener::bind(bind_addr)
             .await
@@ -68,29 +85,87 @@ impl GatewayHandle {
             addr: bind_addr,
             source,
         })?;
-        let app = router(&config);
+        let token = Arc::new(tokio::sync::RwLock::new(config.token.clone()));
+        let state = crate::GatewayRuntimeState {
+            expected_token: token.clone(),
+            permits: Arc::new(tokio::sync::Semaphore::new(config.concurrency)),
+        };
+        let app = crate::router_with_state(&config, state);
         let (shutdown, shutdown_rx) = watch::channel(false);
+        let header_timeout = Duration::from_millis(config.header_timeout_ms.max(1));
         let task = tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
-            let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-                let _ = shutdown_rx.wait_for(|stop| *stop).await;
-            });
-            if let Err(err) = server.await {
-                // An accept-loop failure after a successful bind is
-                // contained and observable (docs/02 failure isolation).
-                tracing::error!(error = %err, "gateway server task failed");
+            let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            let mut connections = JoinSet::new();
+            let mut accept_failed = false;
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.wait_for(|stop| *stop) => break,
+                    accepted = listener.accept() => match accepted {
+                        Ok((stream, _peer)) => {
+                            let app = app.clone();
+                            let mut conn = builder.clone();
+                            connections.spawn(async move {
+                                use tower::ServiceExt as _;
+                                let service = hyper::service::service_fn(
+                                    move |req: hyper::Request<hyper::body::Incoming>| {
+                                        let app = app.clone();
+                                        async move {
+                                            app.oneshot(req.map(axum::body::Body::new)).await
+                                        }
+                                    },
+                                );
+                                let _ = conn
+                                    .http1()
+                                    .timer(TokioTimer::new())
+                                    .header_read_timeout(header_timeout)
+                                    .serve_connection_with_upgrades(
+                                        TokioIo::new(stream),
+                                        service,
+                                    )
+                                    .await;
+                            });
+                        }
+                        Err(err) => {
+                            // Accept-loop failure after a successful bind is
+                            // contained and observable (docs/02 failure
+                            // isolation).
+                            tracing::error!(error = %err, "gateway accept failed");
+                            accept_failed = true;
+                            break;
+                        }
+                    },
+                }
+            }
+            // Drain: give in-flight connections a bounded window (FR-017);
+            // the outer stop(grace) still bounds total shutdown time.
+            drop(listener);
+            let _ = tokio::time::timeout(Duration::from_secs(30), async {
+                while connections.join_next().await.is_some() {}
+            })
+            .await;
+            if accept_failed {
+                tracing::error!("gateway server task ended after accept failure");
             }
         });
         Ok(Self {
             addr,
             task,
             shutdown,
+            token,
         })
     }
 
     #[must_use]
     pub fn addr(&self) -> std::net::SocketAddr {
         self.addr
+    }
+
+    /// Hot-swaps the expected token without a restart (SEC2-02): the old
+    /// token is revoked immediately for all subsequent requests.
+    pub async fn update_token(&self, token: Vec<u8>) {
+        assert!(!token.is_empty(), "token must be non-empty (SEC2-07)");
+        *self.token.write().await = Arc::new(token);
     }
 
     /// Signals shutdown and waits up to `grace` for in-flight requests to
@@ -126,6 +201,7 @@ mod tests {
             body_limit_bytes: body_limit,
             concurrency,
             timeout_ms,
+            header_timeout_ms: 5_000,
         }
     }
 
@@ -291,6 +367,124 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+        handle.stop(Duration::from_secs(2)).await.unwrap();
+    }
+
+    /// SEC2-02: regenerating the token must revoke the old one immediately,
+    /// without a restart.
+    #[tokio::test]
+    async fn update_token_hot_swaps_without_restart() {
+        let handle = GatewayHandle::start(config(0, 5_000, 8, 1 << 20))
+            .await
+            .unwrap();
+        let addr = handle.addr();
+        let old_auth = (
+            "authorization",
+            "Bearer 0123456789abcdefghijklmnopqrstuvwxyz0",
+        );
+        let ok = client()
+            .get(url(addr, "/healthz"))
+            .header(old_auth.0, old_auth.1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), reqwest::StatusCode::OK);
+
+        handle
+            .update_token(b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_vec())
+            .await;
+
+        let old_token = client()
+            .get(url(addr, "/healthz"))
+            .header(old_auth.0, old_auth.1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(old_token.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let new_token = client()
+            .get(url(addr, "/healthz"))
+            .header("x-api-key", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(new_token.status(), reqwest::StatusCode::OK);
+        handle.stop(Duration::from_secs(2)).await.unwrap();
+    }
+
+    /// SEC2-07: an empty token must never start a gateway.
+    #[tokio::test]
+    async fn empty_token_is_rejected_fail_closed() {
+        let error = GatewayHandle::start(GatewayConfig {
+            token: Arc::new(Vec::new()),
+            ..GatewayConfig::default()
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(error, GatewayError::Token(_)));
+    }
+
+    /// SEC2-03: a slowloris client that never finishes its headers is
+    /// dropped within the header-read timeout.
+    #[tokio::test]
+    async fn slowloris_partial_headers_are_dropped() {
+        let mut cfg = config(0, 60_000, 8, 1 << 20);
+        cfg.header_timeout_ms = 500;
+        let handle = GatewayHandle::start(cfg).await.unwrap();
+        let addr = handle.addr();
+
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // Send half a request, then stall forever on the header.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        conn.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            .await
+            .unwrap();
+        let stall_started = std::time::Instant::now();
+        let mut buf = [0u8; 64];
+        let read = tokio::time::timeout(Duration::from_secs(5), conn.read(&mut buf)).await;
+        match read {
+            Err(_timeout) => panic!("slowloris connection was not dropped within 5s"),
+            Ok(Ok(0)) => {} // closed by server ✓
+            Ok(Ok(n)) => {
+                let text = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    text.contains("408") || text.contains("409") || n == 0,
+                    "unexpected partial response: {text}"
+                );
+            }
+            Ok(Err(_)) => {} // connection error = dropped ✓
+        }
+        assert!(stall_started.elapsed() < Duration::from_secs(5));
+        handle.stop(Duration::from_secs(2)).await.unwrap();
+    }
+
+    /// SEC2-05: a chunked body over the limit is rejected with 413 even
+    /// without a content-length header.
+    #[tokio::test]
+    async fn chunked_oversized_body_rejected() {
+        let handle = GatewayHandle::start(config(0, 5_000, 8, 1_024))
+            .await
+            .unwrap();
+        let addr = handle.addr();
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let request = format!(
+            "POST /test/echo HTTP/1.1\r\nHost: {addr}\r\nAuthorization: {AUTH}\r\nTransfer-Encoding: chunked\r\n\r\n"
+        );
+        conn.write_all(request.as_bytes()).await.unwrap();
+        // Two chunks totalling far over the 1 KiB limit.
+        for _ in 0..2 {
+            let chunk = vec![b'x'; 2048];
+            conn.write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                .await
+                .unwrap();
+            conn.write_all(&chunk).await.unwrap();
+            conn.write_all(b"\r\n").await.unwrap();
+        }
+        conn.write_all(b"0\r\n\r\n").await.unwrap();
+        let mut response = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut response)).await;
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.contains("413"), "expected 413, got: {text}");
         handle.stop(Duration::from_secs(2)).await.unwrap();
     }
 }
