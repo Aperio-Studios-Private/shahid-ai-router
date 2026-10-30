@@ -10,7 +10,9 @@ use std::sync::Mutex;
 
 use sair_domain::error::UpstreamFailure;
 use sair_domain::protocol::ProtocolFamily;
-use sair_domain::routing::{Exclusion, RouteCandidate, RoutingDecision, Strategy};
+use sair_domain::routing::{
+    CapabilityRequirements, Exclusion, RouteCandidate, RoutingDecision, Strategy,
+};
 use sair_persistence::repos::ExcludedCandidate;
 
 /// In-memory rotation bookkeeping (ADR-012). Guarded by a mutex with short
@@ -70,6 +72,7 @@ pub fn plan_route(
     alias: &str,
     family: ProtocolFamily,
     strategy: Strategy,
+    requirements: CapabilityRequirements,
     candidates: &[RouteCandidate],
     excluded: &[ExcludedCandidate],
     rotation: &RotationState,
@@ -92,15 +95,23 @@ pub fn plan_route(
     let eligible: Vec<RouteCandidate> = candidates
         .iter()
         .filter(|c| {
-            let ok = c.capabilities.supports_protocol(family);
-            if !ok {
+            // F-6: protocol filter first, capability filter second; one
+            // reason per candidate (first failing check).
+            let reason = if !c.capabilities.supports_protocol(family) {
+                Some("protocol_mismatch")
+            } else {
+                requirements.first_unmet(&c.capabilities)
+            };
+            if let Some(reason) = reason {
                 exclusions.push(Exclusion {
                     deployment_id: c.deployment_id.clone(),
                     credential_id: c.credential_id.clone(),
-                    reason: "protocol_mismatch".to_string(),
+                    reason: reason.to_string(),
                 });
+                false
+            } else {
+                true
             }
-            ok
         })
         .cloned()
         .collect();
@@ -193,6 +204,7 @@ mod tests {
             credential_id: cred.to_string(),
             credential_secret_ref: format!("sair.cred.{cred}"),
             credential_account_id: None,
+            provider_type: "openai_compatible".to_string(),
             alias_priority: alias_p,
             credential_priority: cred_p,
             credential_weight: 1,
@@ -210,6 +222,7 @@ mod tests {
             "a",
             ProtocolFamily::OpenAiChat,
             Strategy::Priority,
+            sair_domain::routing::CapabilityRequirements::default(),
             &candidates,
             &[],
             &rotation,
@@ -234,6 +247,7 @@ mod tests {
             "a",
             ProtocolFamily::OpenAiChat,
             Strategy::Priority,
+            sair_domain::routing::CapabilityRequirements::default(),
             &candidates,
             &[],
             &rotation,
@@ -255,6 +269,7 @@ mod tests {
             "a",
             ProtocolFamily::OpenAiChat,
             Strategy::Priority,
+            sair_domain::routing::CapabilityRequirements::default(),
             &candidates,
             &excluded,
             &rotation,
@@ -271,6 +286,7 @@ mod tests {
             "ghost",
             ProtocolFamily::OpenAiChat,
             Strategy::Priority,
+            sair_domain::routing::CapabilityRequirements::default(),
             &[],
             &[],
             &rotation,
@@ -288,6 +304,7 @@ mod tests {
                 "a",
                 ProtocolFamily::OpenAiChat,
                 strategy,
+                sair_domain::routing::CapabilityRequirements::default(),
                 &candidates,
                 &[],
                 &rotation,
@@ -316,6 +333,7 @@ mod tests {
                     "shared-alias",
                     ProtocolFamily::OpenAiChat,
                     Strategy::RoundRobin,
+                    sair_domain::routing::CapabilityRequirements::default(),
                     &candidates,
                     &[],
                     &rotation,
@@ -347,6 +365,7 @@ mod tests {
             "w",
             ProtocolFamily::OpenAiChat,
             Strategy::Weighted,
+            sair_domain::routing::CapabilityRequirements::default(),
             &candidates,
             &[],
             &rotation,

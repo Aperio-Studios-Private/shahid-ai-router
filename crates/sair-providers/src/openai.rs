@@ -28,6 +28,14 @@ pub struct ChatOutcome {
     pub tokens_out: Option<i64>,
 }
 
+/// Header-safe contract (Phase 5, F-5): header VALUES may contain visible
+/// ASCII and spaces (no CR/LF or other control characters, no DEL); length
+/// bounded. Header NAMES are fixed constants in our call sites.
+#[must_use]
+pub fn is_header_safe(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
+}
+
 /// Sends one non-streaming chat completion. `base_url` is normalized and
 /// joined with the fixed `/chat/completions` segment.
 ///
@@ -39,8 +47,26 @@ pub async fn send_chat(
     base_url: &str,
     model_id: &str,
     credential: &SecretBytes,
+    body: Value,
+    timeout: Duration,
+) -> Result<ChatOutcome, UpstreamFailure> {
+    send_chat_with_headers(client, base_url, model_id, credential, body, timeout, &[]).await
+}
+
+/// As [`send_chat`], attaching pre-validated extra headers (provider-specific
+/// attribution, Phase 5). Invalid entries are skipped by the CALLER; this
+/// function only receives header-safe pairs.
+///
+/// # Errors
+/// See [`send_chat`].
+pub async fn send_chat_with_headers(
+    client: &SsrfCheckedClient,
+    base_url: &str,
+    model_id: &str,
+    credential: &SecretBytes,
     mut body: Value,
     timeout: Duration,
+    extra_headers: &[(String, String)],
 ) -> Result<ChatOutcome, UpstreamFailure> {
     let key = credential
         .expose_str()
@@ -91,6 +117,20 @@ pub async fn send_chat(
         .bearer_auth(&key)
         .timeout(timeout)
         .json(&body);
+    let request = extra_headers.iter().fold(request, |req, (name, value)| {
+        // Callers pre-validate via is_header_safe; from_str is fallible so a
+        // bad value can never panic (F-5).
+        match (
+            reqwest::header::HeaderName::try_from(name.as_str()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            (Ok(n), Ok(v)) => req.header(n, v),
+            _ => {
+                tracing::warn!(header = %name, "skipping invalid attribution header");
+                req
+            }
+        }
+    });
 
     let response = request.send().await.map_err(|e| classify_transport(&e))?;
 

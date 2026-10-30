@@ -294,13 +294,14 @@ pub async fn add_model(
     streaming: bool,
     tool_calling: bool,
     vision: bool,
+    structured_output: bool,
     context_window: Option<i64>,
 ) -> Result<String, String> {
     let capabilities = json!({
         "streaming": streaming,
         "tool_calling": tool_calling,
         "vision": vision,
-        "structured_output": false,
+        "structured_output": structured_output,
         "context_window": context_window,
     });
     state
@@ -422,6 +423,34 @@ pub async fn delete_alias(state: State<'_, AppState>, id: String) -> Result<(), 
         .db
         .repos()
         .delete_alias(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Phase 5 (F-2): edits a model row's capability flags so the router's
+/// capability requirements can match reality.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // mirrors the capabilities JSON fields
+pub async fn update_model_capabilities(
+    state: State<'_, AppState>,
+    model_pk: String,
+    streaming: bool,
+    tool_calling: bool,
+    vision: bool,
+    structured_output: bool,
+    context_window: Option<i64>,
+) -> Result<(), String> {
+    let capabilities = json!({
+        "streaming": streaming,
+        "tool_calling": tool_calling,
+        "vision": vision,
+        "structured_output": structured_output,
+        "context_window": context_window,
+    });
+    state
+        .db
+        .repos()
+        .update_model_capabilities(&model_pk, &capabilities)
         .await
         .map_err(|e| e.to_string())
 }

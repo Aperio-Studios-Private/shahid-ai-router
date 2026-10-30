@@ -9,7 +9,11 @@
 pub mod adapter;
 pub mod http;
 pub mod openai;
+pub mod openrouter;
 
 pub use adapter::{AdapterCapabilities, MockProvider, ProviderAdapter, ProviderId};
 pub use http::{SsrfCheckedClient, SsrfError, SsrfPolicy, ValidatingResolver, build_client};
-pub use openai::{ChatOutcome, MAX_RESPONSE_BYTES, send_chat};
+pub use openai::{
+    ChatOutcome, MAX_RESPONSE_BYTES, is_header_safe, send_chat, send_chat_with_headers,
+};
+pub use openrouter::AttributionConfig;

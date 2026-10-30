@@ -228,3 +228,23 @@ impl Repos<'_> {
         Ok(())
     }
 }
+
+impl Repos<'_> {
+    /// Phase 5 (F-2): updates a model row's capability flags.
+    ///
+    /// # Errors
+    /// DB failures.
+    pub async fn update_model_capabilities(
+        &self,
+        model_pk: &str,
+        capabilities: &serde_json::Value,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE models SET capabilities = ?2, verified_at = ?3 WHERE id = ?1")
+            .bind(model_pk)
+            .bind(capabilities.to_string())
+            .bind(crate::time::now_iso())
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+}

@@ -24,7 +24,7 @@ use sair_vault::SecretStore;
 use serde_json::{Value, json};
 
 use crate::routing::{RotationState, cooldown_for, plan_route};
-use sair_providers::openai::{ChatOutcome, send_chat};
+use sair_providers::openai::{ChatOutcome, send_chat, send_chat_with_headers};
 use sair_providers::{SsrfCheckedClient, SsrfPolicy, build_client};
 
 /// Maps a classification to a schema-legal `health_events.event` value
@@ -52,13 +52,20 @@ pub struct ApiDeps {
     /// FR-021: per-deployment concurrency semaphores (R4-06: setting applies
     /// at gateway (re)start).
     pub deployment_concurrency: usize,
+    /// Phase 5: OpenRouter attribution config (applies at gateway restart).
+    pub openrouter_attribution: sair_providers::openrouter::AttributionConfig,
     semaphores: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>,
 }
 
 impl ApiDeps {
     /// Builds the two policy-fixed clients (strict + loopback opt-in).
     #[must_use]
-    pub fn new(db: Db, vault: Arc<dyn SecretStore>, deployment_concurrency: usize) -> Self {
+    pub fn new(
+        db: Db,
+        vault: Arc<dyn SecretStore>,
+        deployment_concurrency: usize,
+        openrouter_attribution: sair_providers::openrouter::AttributionConfig,
+    ) -> Self {
         Self {
             db,
             vault,
@@ -66,6 +73,7 @@ impl ApiDeps {
             client_strict: build_client(SsrfPolicy::default()),
             client_loopback: build_client(SsrfPolicy::allow_loopback()),
             deployment_concurrency: deployment_concurrency.max(1),
+            openrouter_attribution,
             semaphores: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -216,10 +224,12 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
         }
     };
 
+    let requirements = sair_domain::routing::CapabilityRequirements::derive_from_body(&parsed);
     let decision = match plan_route(
         alias,
         sair_domain::protocol::ProtocolFamily::OpenAiChat,
         strategy,
+        requirements,
         &candidates,
         &excluded,
         &api.rotation,
@@ -239,7 +249,17 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
                     format!("strategy_{s}_not_implemented"),
                 ),
             };
-            return openai_error(status, &code, &e.to_string(), json!({ "alias": alias }));
+            // F-4: surface why every candidate was excluded (FR-012).
+            let reasons: Vec<String> = excluded
+                .iter()
+                .map(|x| format!("{}: {}", x.deployment_id, x.reason))
+                .collect();
+            return openai_error(
+                status,
+                &code,
+                &e.to_string(),
+                json!({ "alias": alias, "reasons": reasons }),
+            );
         }
     };
 
@@ -326,16 +346,32 @@ async fn chat_completions(State(api): State<Arc<ApiDeps>>, body: Bytes) -> Respo
             .clone()
             .unwrap_or_else(|| candidate.base_url.clone());
 
-        match send_chat(
-            client,
-            &base,
-            &candidate.model_id,
-            &secret,
-            parsed.clone(),
-            Duration::from_millis(policy.timeout_ms.max(1) as u64),
-        )
-        .await
-        {
+        // F-1: attribution headers are OpenRouter-only, per candidate
+        // dispatch. Never leaked to other providers.
+        let send_result = if candidate.provider_type == "openrouter" {
+            let extra = api.openrouter_attribution.headers();
+            send_chat_with_headers(
+                client,
+                &base,
+                &candidate.model_id,
+                &secret,
+                parsed.clone(),
+                Duration::from_millis(policy.timeout_ms.max(1) as u64),
+                &extra,
+            )
+            .await
+        } else {
+            send_chat(
+                client,
+                &base,
+                &candidate.model_id,
+                &secret,
+                parsed.clone(),
+                Duration::from_millis(policy.timeout_ms.max(1) as u64),
+            )
+            .await
+        };
+        match send_result {
             Ok(ChatOutcome {
                 status,
                 body,
@@ -643,7 +679,7 @@ mod tests {
             .await
             .unwrap();
 
-        let api = Arc::new(ApiDeps::new(db, vault, 4));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default()));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,

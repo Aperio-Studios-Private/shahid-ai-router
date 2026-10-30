@@ -220,10 +220,19 @@ impl AppState {
             .and_then(serde_json::Value::as_u64)
             .and_then(|v| usize::try_from(v).ok().filter(|c| *c >= 1))
             .unwrap_or(4);
+        let attribution = self
+            .db
+            .get_setting("openrouter_attribution")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| sair_providers::openrouter::AttributionConfig::from_value(Some(&v)))
+            .unwrap_or_default();
         let api = Arc::new(sair_gateway::api::ApiDeps::new(
             self.db.clone(),
             self.vault.clone(),
             deployment_concurrency,
+            attribution,
         ));
         let mut config = GatewayConfig {
             token: Arc::new(token),

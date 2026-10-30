@@ -85,7 +85,12 @@ mod rotation_tests {
             deployment_ids.push(deployment_id);
         }
 
-        let api = Arc::new(ApiDeps::new(db.clone(), vault, deployment_concurrency));
+        let api = Arc::new(ApiDeps::new(
+            db.clone(),
+            vault,
+            deployment_concurrency,
+            Default::default(),
+        ));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,
@@ -151,7 +156,7 @@ mod rotation_tests {
             .await
             .unwrap();
 
-        let api = Arc::new(ApiDeps::new(db.clone(), vault, 4));
+        let api = Arc::new(ApiDeps::new(db.clone(), vault, 4, Default::default()));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,

@@ -1,6 +1,7 @@
 //! Capability metadata and routing-decision types (FR-004/007/012, ADR-009).
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::protocol::ProtocolFamily;
 
@@ -50,6 +51,51 @@ impl Strategy {
 #[error("routing strategy is declared but not implemented: {0}")]
 pub struct UnimplementedStrategy(pub String);
 
+/// Capability requirements derived from the request body (FR-007; Phase 5).
+/// Explicit signals only: empty/nonexistent `tools` imposes no requirement;
+/// `response_format` type `text`/unknown fails open (review F-2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CapabilityRequirements {
+    pub tool_calling: bool,
+    pub structured_output: bool,
+}
+
+impl CapabilityRequirements {
+    /// Derives requirements from a chat-completions request body.
+    #[must_use]
+    pub fn derive_from_body(body: &Value) -> Self {
+        let mut requirements = Self::default();
+        let tools_required = body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty());
+        requirements.tool_calling = tools_required;
+        // F-2: only structured brands require the capability; "text" and
+        // unknown brands fail open.
+        if let Some("json_object" | "json_schema") = body
+            .get("response_format")
+            .and_then(|rf| rf.get("type"))
+            .and_then(|brand| brand.as_str())
+        {
+            requirements.structured_output = true;
+        }
+        requirements
+    }
+
+    /// First failing capability check for a candidate, if any (F-6: one
+    /// reason per candidate).
+    #[must_use]
+    pub fn first_unmet(&self, capabilities: &CapabilityMetadata) -> Option<&'static str> {
+        if self.tool_calling && !capabilities.tool_calling {
+            return Some("capability_tool_calling");
+        }
+        if self.structured_output && !capabilities.structured_output {
+            return Some("capability_structured_output");
+        }
+        None
+    }
+}
+
 /// One routable (deployment, credential) pair (ADR-018 composition).
 #[derive(Debug, Clone, Serialize)]
 pub struct RouteCandidate {
@@ -66,6 +112,8 @@ pub struct RouteCandidate {
     pub credential_secret_ref: String,
     /// Account group (docs/05 Quota truth): BillingOrQuota cools the group.
     pub credential_account_id: Option<String>,
+    /// Provider kind (Phase 5 dispatch: attribution headers etc.).
+    pub provider_type: String,
     /// Ordering: alias-deployment priority (higher first).
     pub alias_priority: i64,
     /// Ordering: credential priority (higher first, within a deployment).

@@ -52,6 +52,7 @@ pub fn run() {
             commands_management::delete_credential,
             commands_management::list_deployments,
             commands_management::add_model,
+            commands_management::update_model_capabilities,
             commands_management::add_deployment,
             commands_management::set_deployment_enabled,
             commands_management::delete_deployment,
