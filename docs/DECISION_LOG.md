@@ -90,7 +90,16 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Decision: Windows 10+ x64 (WebView2 Evergreen); macOS 12+ x86_64/aarch64. Exact Tauri 2 minimums verified at Phase 1 build; docs/12 amended accordingly.
 - Revisit trigger: Tauri 2 minimum OS change.
 
-## ADR-015: SSRF enforcement via validating custom resolver
+## ADR-017: Retry/failover semantics v0 (Phase 3)
+- Status: Accepted. Date: 2026-10-31 (per Phase 3 review findings R3-01/R3-02).
+- Decision: (1) Classification is body-aware on 4xx — 429 with `insufficient_quota` type/code is BillingOrQuota (rotation stops; shared-account keys are not burned), plain 429 is RateLimited; 404 disambiguates model availability; ContextLimit matched before generic InvalidRequest; malformed/oversized 200 bodies are classified errors, never passthrough. (2) Retry-After (seconds) → credential cooldown + immediate rotation; no in-request sleeping in v0 (no storms, bounded latency); no same-credential retry → backoff/jitter not applicable v0. (3) `timeout_ms` is per-attempt (request-builder override); `retry_budget_ms` is the wall-clock budget across attempts; policy rows are always written explicitly (schema defaults not relied on). (4) Timeout does NOT rotate: generation may have executed upstream (docs/05 ambiguous-timeout rule) — surface to client; rotation set = RateLimited/ProviderUnavailable/TransportFailure only.
+- Consequences: quota-exhaustion storms and blind retries are structurally prevented; timeout latency is paid once per request.
+- Revisit trigger: provider idempotency support enabling safe timeout retries (docs/05).
+
+## ADR-018: Candidate composition and strategy scope (Phase 3)
+- Status: Accepted. Date: 2026-10-31 (per review finding R3-03/R3-04).
+- Decision: routing candidates are (alias-deployment, credential) pairs ordered by lexicographic priority (alias_deployments.priority, credentials.priority), weights from credential.weight; strategies priority/round_robin/weighted implemented; lru/manual_pin declared but rejected with structured 501 until implemented (honest incompleteness). Rotation state (per-alias round-robin counters, attempt bookkeeping) lives behind `tokio::sync::Mutex<RotationState>` with critical sections that never span awaits (ADR-012), verified by a deterministic 20-task concurrent test in Phase 3.
+- Revisit trigger: user need for lru/pin strategies.
 - Status: Accepted. Date: 2026-10-31 (per Phase 2 review finding F-3; supersedes the connector-rewrite wording in ADR-011).
 - Context: reqwest 0.13 has no full connector replacement; rewriting the connect target to a validated IP breaks TLS SNI/certificate identity, and weakening verification is forbidden (SECURITY_RULES #6).
 - Decision: enforce SSRF policy in a custom `Resolve` implementation so resolution and validation happen together and only validated addresses are returned (reqwest connects exactly to resolver output — TOCTOU window minimized while TLS identity stays on the hostname). Redirects governed by `redirect::Policy::custom` (stop on host/scheme change, ≤3 same-host hops). Scheme policy and extended denylist live in `SsrfPolicy` (multicast/reserved/NAT64/6to4 added; default-deny unclassified).
