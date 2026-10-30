@@ -1,0 +1,19 @@
+[package]
+name = "sair-persistence"
+description = "SQLite persistence (ADR-004): SQLx, embedded migrations, repositories. No transactions across network awaits."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sair-domain = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

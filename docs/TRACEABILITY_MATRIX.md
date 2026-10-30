@@ -2,15 +2,32 @@
 
 Maintain requirement -> task -> source files -> tests/evidence -> status. Do not mark implemented without evidence.
 
+Statuses: Planned | In progress | Implemented (evidence ref) | Verified (independent evidence).
+
 | Requirement | Description | Phase | Task | Evidence | Status |
 |---|---|---:|---|---|---|
-| FR-001 | Provider management | 3+ | TBD | TBD | Planned |
-| FR-002 | Multiple credentials | 4 | TBD | TBD | Planned |
-| FR-003/004 | Models and aliases | 3-5 | TBD | TBD | Planned |
-| FR-005/006 | Gateway and protocols | 3,6 | TBD | TBD | Planned |
-| FR-007/008/009 | Routing, rotation, failover | 4+ | TBD | TBD | Planned |
-| FR-010 | Streaming | 7 | TBD | TBD | Planned |
-| FR-011/012 | History and health | 3+ | TBD | TBD | Planned |
-| FR-013 | Agent profiles | 8 | TBD | TBD | Planned |
-| FR-014 | Import/export | 10 | TBD | TBD | Planned |
-| FR-015/016 | Lifecycle and diagnostics | 1+ | TBD | TBD | Planned |
+| FR-001 | Provider management | 3+ | P3-T05 (UI), P3-T04 (backend) | TBD | Planned |
+| FR-002 | Credential pool | 4 | Phase 4 epic | TBD | Planned |
+| FR-003 | Model catalogue | 3 | P3-T01/T03 | TBD | Planned |
+| FR-004 | Virtual aliases (same-protocol, ADR-009) | 3-5 | P3-T03, Phase 5 | TBD | Planned |
+| FR-005 | Local gateway (loopback + auth) | 3 | P3-T04 (middleware: P2-T03) | TBD | Planned |
+| FR-006 | Protocol surfaces (ADR-010 scope) | 3,6 | P3-T04, Phase 6 | TBD | Planned |
+| FR-007 | Capability-aware routing | 3-5 | P3-T03, Phase 5 | TBD | Planned |
+| FR-008 | Rotation | 4 | Phase 4 epic | TBD | Planned |
+| FR-009 | Retry/failover | 4 | Phase 4 epic | TBD | Planned |
+| FR-010 | Streaming | 7 | Phase 7 epic | TBD | Planned |
+| FR-011 | Request history | 3 | P3-T04 | TBD | Planned |
+| FR-012 | Health diagnostics | 4+ | Phase 4 epic | TBD | Planned |
+| FR-013 | Agent profiles | 8 | Phase 8 epic | TBD | Planned |
+| FR-014 | Backup/restore | 10 | Phase 10 epic | TBD | Planned |
+| FR-015 | Lifecycle | 1+ | P1-T04 (skeleton), Phase 2/3 | reports/phase-reports/phase-1.md | In progress |
+| FR-016 | Redacted diagnostics | 2+ | P2-T04 | TBD | Planned |
+| FR-017 | Graceful drain | 3 | P3-T04 | TBD | Planned |
+| FR-018 | Port conflict surfaced | 1 | P1-T04, Phase 3 | TBD | Planned |
+| FR-019 | Token rotation | 2 | P2-T03 | TBD | Planned |
+| FR-020 | Retention 30d | 3 | P3-T04 | TBD | Planned |
+| FR-021 | Upstream concurrency bound | 4 | Phase 4 epic | TBD | Planned |
+| FR-022 | Lifecycle transparency | 1 | P1-T04 (UI states gateway state) | reports/phase-reports/phase-1.md | In progress |
+| FR-023 | Routing scope/agent constraints | 3+ | P3-T03, Phase 8 | TBD | Planned |
+
+NFR evidence: security (P2 gates), performance budget (Phase 11), a11y (Phase 9), cross-platform (ADR-013 CI matrix).

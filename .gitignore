@@ -1,0 +1,30 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Tauri
+src-tauri/gen/
+
+# Env & secrets — never commit
+.env
+.env.*
+*.local
+!*.example
+
+# Logs & OS noise
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp

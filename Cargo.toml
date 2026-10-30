@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sair-domain",
+    "crates/sair-persistence",
+    "crates/sair-vault",
+    "crates/sair-providers",
+    "crates/sair-gateway",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+repository = "https://example.invalid/shahid-ai-router"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+
+[workspace.dependencies]
+# async runtime and server
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# errors
+thiserror = "2"
+
+# observability
+tracing = "0.1"
+
+# persistence
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+
+# secrets (ADR-005)
+keyring = { version = "4.2", features = ["v1"] }
+
+# HTTP client (ADR-006: rustls + ring provider)
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+
+# desktop shell (tauri-build is versioned independently of tauri)
+tauri = { version = "2.12", features = [] }
+tauri-build = { version = "2", features = [] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# internal crates
+sair-domain = { path = "crates/sair-domain" }
+sair-persistence = { path = "crates/sair-persistence" }
+sair-vault = { path = "crates/sair-vault" }
+sair-providers = { path = "crates/sair-providers" }
+sair-gateway = { path = "crates/sair-gateway" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

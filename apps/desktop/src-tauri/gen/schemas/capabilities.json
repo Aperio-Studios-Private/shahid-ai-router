@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Least-privilege capability for the main window (ADR-011/docs/06): core defaults only; no shell, fs, or http plugin access.","local":true,"windows":["main"],"permissions":["core:default"]}}

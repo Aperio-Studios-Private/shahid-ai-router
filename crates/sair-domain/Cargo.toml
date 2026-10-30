@@ -1,0 +1,12 @@
+[package]
+name = "sair-domain"
+description = "Pure domain types for Shahid AI Router: error taxonomy, protocol families, routing policy types. No IO."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true
