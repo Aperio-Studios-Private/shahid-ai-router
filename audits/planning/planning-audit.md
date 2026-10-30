@@ -110,4 +110,23 @@ Execution order constraint (docs/13): one feature at a time through the full wor
 
 ## 10. Plan status
 
-READY FOR INDEPENDENT REVIEW. Implementation starts only after reviewer findings are resolved per the workflow state machine.
+REVIEWED — APPROVE WITH CHANGES (see §11). Implementation may proceed once §11 resolutions are incorporated; they are incorporated in this revision.
+
+## 11. Independent review resolution (2026-10-30)
+
+Reviewer: independent subagent (not an author of this plan). Full report: `audits/planning/plan-review-report.md`. Reviewer independently re-verified the version/API claims (all confirmed). Disposition of each finding:
+
+| ID | Sev | Finding | Resolution | Status |
+|---|---|---|---|---|
+| R-1 | High | Cross-protocol translation scope unresolved (alias routing OpenAI-surface request → Anthropic upstream) | **v1 scope decision:** routing is same-protocol only. A request received on a protocol surface may only be routed to deployments whose upstream natively speaks that protocol (passthrough, per FR-006). Cross-protocol translation (e.g., OpenAI surface → Anthropic upstream) is explicitly out of scope for v1 and becomes a post-v1 opt-in capability declared per-adapter. Alias capability matching includes "protocol family" as a first-class capability. | Resolved |
+| R-2 | High | Agent-required endpoints/constraints missing from G-07 (Codex CLI `wire_api="responses"`, Claude Code `/v1/messages/count_tokens`) | Scope amended: Anthropic surface adds `/v1/messages/count_tokens` (proxied for Anthropic upstreams; structured 501 for incompatible upstreams). `/v1/responses` is out of scope v1; Codex CLI profiles pin `wire_api="chat"` and are verified at Phase 8 against the documented agent version. Added to FR-023 amendment. | Resolved |
+| R-3 | Medium | reqwest 0.13 default rustls provider (aws-lc-rs) needs CMake+NASM, absent on this machine; local builds would fail while CI passes | **ADR-013:** TLS = rustls with the **ring** crypto provider (reqwest `rustls-no-provider` + ring), avoiding CMake/NASM on Windows while keeping an audited provider. Revisit only if ring blocks something concrete. | Resolved |
+| R-4 | Medium | ADR-2 cited nonexistent keyring 4.x feature names (`windows-native`/`apple-native`) | Corrected: keyring 4.2.0 features are only `default`/`v1`/`cli`; platform stores are separate crates. **Decision:** depend on `keyring` (v1 API) plus `windows-native-keyring-store` / `apple-native-keyring-store` directly (maintainers' recommendation), behind our `SecretStore` trait; exact construction API verified at Phase 2 against docs.rs. | Resolved |
+| R-5 | Medium | No Host/Origin validation (DNS-rebinding / browser-origin hardening) | Gateway middleware added to scope: accept only `Host: 127.0.0.1[:port]` / `localhost[:port]` (and configured loopback literals); reject others with 403. Negative tests in Phase 2/3. | Resolved |
+| R-6 | Medium | SSRF resolve-then-connect TOCTOU; denylist under-specified | SSRF enforcement moved to a **custom connect layer**: every resolved socket address is re-checked immediately before connect. Denylist specified: IPv4 loopback/private/link-local/0.0.0.0/8/CGNAT 100.64/10/broadcast; IPv6 ::1, ULA fc00::/7, link-local fe80::/10, IPv4-mapped ::ffff:0:0/96 (apply v4 rules to mapped). Exception only for explicit user-opted loopback literals (local dev providers). Residual risk documented; revalidated at security review. | Resolved |
+| R-7 | Medium | Rotation-state concurrency left aspirational | **Committed mechanism:** `tokio::sync::Mutex<RotationState>` with strictly short critical sections (never held across `.await` of network/DB work), health updates applied via an ordered internal event path; Phase 4 concurrent-rotation tests built on this. | Resolved |
+| R-8 | Low | Config-only import: dangling `secret_ref` semantics undefined | Import validation marks credentials without a vault item as state `INCOMPLETE`; surfaced in UI; user re-enters the secret; documented in Phase 10 tests. | Resolved |
+| R-9 | Low | Minimum OS versions never stated | **Amended (docs/12):** Windows 10 x64+ (WebView2 Evergreen), macOS 12+ (x86_64 + aarch64), pending verification of Tauri 2 minimum at Phase 1 build. | Resolved |
+| R-10 | Info | Repo-state staleness; missing .gitignore/identity/DECISION_LOG | Fixed in this revision: dedicated repo initialized (baseline commit), repo-local git identity, `.gitignore`/`.gitattributes` at scaffold, DECISION_LOG populated (ADR-001…ADR-014). | Resolved |
+
+All findings valid and resolved; none rejected. This audit now reflects the reviewed-and-corrected plan.

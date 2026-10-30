@@ -26,3 +26,12 @@ As a user, I can add several providers and keys, test them safely, create a mode
 
 ## Acceptance
 Every requirement must map to tasks and executable tests or documented manual acceptance evidence. Unimplemented requirements must remain visibly incomplete.
+
+## Phase 0 amendments (2026-10-30, from planning audit + independent review)
+- FR-017 Graceful drain: gateway stop/app exit drains in-flight requests within a bounded grace period; streaming responses terminate cleanly.
+- FR-018 Port conflict: bind failure on the configured port is an explicit surfaced error; no silent port fallback.
+- FR-019 Token rotation: user-facing gateway token regeneration with client-impact warning.
+- FR-020 History retention: metadata-only request records default to 30-day retention with automatic cleanup.
+- FR-021 Upstream concurrency bound: per-deployment concurrency semaphore, configurable.
+- FR-022 Lifecycle transparency: v1 gateway runs only while the app process runs; UI states this.
+- FR-023 Routing scope (ADR-009/010): v1 routes same-protocol only; Anthropic surface includes `/v1/messages/count_tokens`; `/v1/responses` out of scope v1 (Codex CLI profiles pin `wire_api="chat"`).
