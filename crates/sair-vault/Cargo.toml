@@ -17,6 +17,7 @@ mock = []
 sair-domain = { workspace = true }
 thiserror = { workspace = true }
 ring = { workspace = true }
+zeroize = { workspace = true }
 keyring = { version = "4.2", features = ["v1"], optional = true }
 
 [dev-dependencies]

@@ -35,6 +35,9 @@ pub struct GatewayConfig {
     pub timeout_ms: u64,
     /// Per-connection header-read timeout in ms; slowloris bound (SEC2-03).
     pub header_timeout_ms: u64,
+    /// Protocol-surface dependencies (Phase 3+). `None` = gateway serves
+    /// health only.
+    pub api: Option<Arc<crate::api::ApiDeps>>,
 }
 
 impl Default for GatewayConfig {
@@ -46,6 +49,7 @@ impl Default for GatewayConfig {
             concurrency: 16,
             timeout_ms: 120_000,
             header_timeout_ms: 10_000,
+            api: None,
         }
     }
 }
@@ -202,6 +206,7 @@ mod tests {
             concurrency,
             timeout_ms,
             header_timeout_ms: 5_000,
+            api: None,
         }
     }
 

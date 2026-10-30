@@ -9,6 +9,7 @@
 //! - `request_records` are metadata-only; no bodies are ever stored
 //!   (docs/07, ADR-008).
 
+pub mod repos;
 pub mod time;
 
 use std::str::FromStr;
@@ -388,6 +389,48 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(policy, None);
+    }
+
+    #[tokio::test]
+    async fn migration_0002_columns_present_with_defaults() {
+        let db = migrated_db().await;
+        sqlx::query(
+            "INSERT INTO providers (id, name, provider_type, base_url, enabled, created_at, updated_at)
+             VALUES ('p9', 'X', 'openai_compatible', 'https://x.local', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let allow_loopback: i64 =
+            sqlx::query_scalar("SELECT allow_loopback FROM providers WHERE id = 'p9'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(allow_loopback, 0);
+        sqlx::query(
+            "INSERT INTO request_records (id, ts, correlation_id, status) VALUES ('q9', '2026-01-01T00:00:00Z', 'c9', 200)",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let decision: Option<String> =
+            sqlx::query_scalar("SELECT decision_json FROM request_records WHERE id = 'q9'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(decision, None);
+        sqlx::query(
+            "INSERT INTO health_events (id, ts, subject_type, subject_id, event) VALUES ('h9', '2026-01-01T00:00:00Z', 'provider', 'p9', 'ok')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let correlation: Option<String> =
+            sqlx::query_scalar("SELECT correlation_id FROM health_events WHERE id = 'h9'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(correlation, None);
     }
 
     #[tokio::test]

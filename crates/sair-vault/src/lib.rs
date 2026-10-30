@@ -13,6 +13,7 @@
 //! for credentials and `sair.gateway-token` for the local gateway token.
 
 pub mod refs;
+pub mod secret_bytes;
 pub mod store;
 
 #[cfg(feature = "mock")]
@@ -22,6 +23,7 @@ pub mod mock;
 pub mod os;
 
 pub use refs::{credential_ref, gateway_token_ref};
+pub use secret_bytes::SecretBytes;
 pub use store::{SecretRef, SecretStore, VaultError};
 
 #[cfg(feature = "mock")]

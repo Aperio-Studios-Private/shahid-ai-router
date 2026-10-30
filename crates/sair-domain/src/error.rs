@@ -67,6 +67,88 @@ impl ErrorCategory {
     pub fn is_account_level(self) -> bool {
         matches!(self, ErrorCategory::BillingOrQuota)
     }
+
+    /// Routing action for a classified failure (ADR-017). Timeout never
+    /// rotates: generation may have executed upstream (docs/05
+    /// ambiguous-timeout rule).
+    #[must_use]
+    pub fn rotation_action(self) -> FailureAction {
+        match self {
+            ErrorCategory::RateLimited
+            | ErrorCategory::ProviderUnavailable
+            | ErrorCategory::TransportFailure
+            | ErrorCategory::ModelUnavailable => FailureAction::Rotate,
+            ErrorCategory::InvalidCredential | ErrorCategory::PermissionDenied => {
+                FailureAction::Quarantine
+            }
+            ErrorCategory::BillingOrQuota
+            | ErrorCategory::Timeout
+            | ErrorCategory::InvalidRequest
+            | ErrorCategory::ContextLimit
+            | ErrorCategory::Unknown => FailureAction::Stop,
+        }
+    }
+}
+
+/// What the router does after a classified failure (ADR-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureAction {
+    /// Try the next candidate.
+    Rotate,
+    /// Quarantine the credential and stop (auth failures).
+    Quarantine,
+    /// Surface to the client without further attempts.
+    Stop,
+}
+
+/// A classified upstream failure (docs/04): category plus preserved upstream
+/// status/code and a bounded safe detail message. Never carries credential
+/// material or raw bodies.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpstreamFailure {
+    pub category: ErrorCategory,
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub detail: String,
+    pub retry_after_secs: Option<u64>,
+}
+
+impl UpstreamFailure {
+    #[must_use]
+    pub fn action(&self) -> FailureAction {
+        self.category.rotation_action()
+    }
+
+    /// Stable snake_case name for records and error envelopes.
+    #[must_use]
+    pub fn category_str(&self) -> &'static str {
+        match self.category {
+            ErrorCategory::InvalidCredential => "invalid_credential",
+            ErrorCategory::PermissionDenied => "permission_denied",
+            ErrorCategory::BillingOrQuota => "billing_or_quota",
+            ErrorCategory::RateLimited => "rate_limited",
+            ErrorCategory::ModelUnavailable => "model_unavailable",
+            ErrorCategory::InvalidRequest => "invalid_request",
+            ErrorCategory::ContextLimit => "context_limit",
+            ErrorCategory::Timeout => "timeout",
+            ErrorCategory::ProviderUnavailable => "provider_unavailable",
+            ErrorCategory::TransportFailure => "transport_failure",
+            ErrorCategory::Unknown => "unknown",
+        }
+    }
+
+    /// A local (non-upstream) failure surfaced through the same envelope.
+    #[must_use]
+    pub fn internal(detail: &str) -> Self {
+        Self {
+            category: ErrorCategory::Unknown,
+            status: None,
+            code: Some("internal".to_string()),
+            detail: detail.to_string(),
+            retry_after_secs: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -99,5 +181,53 @@ mod tests {
     fn billing_is_account_level_but_not_a_credential_fault() {
         assert!(ErrorCategory::BillingOrQuota.is_account_level());
         assert!(!ErrorCategory::BillingOrQuota.should_quarantine_credential());
+    }
+
+    #[test]
+    fn rotation_actions_follow_adr017() {
+        use super::FailureAction;
+        // Rotating set.
+        assert_eq!(
+            ErrorCategory::RateLimited.rotation_action(),
+            FailureAction::Rotate
+        );
+        assert_eq!(
+            ErrorCategory::ProviderUnavailable.rotation_action(),
+            FailureAction::Rotate
+        );
+        assert_eq!(
+            ErrorCategory::TransportFailure.rotation_action(),
+            FailureAction::Rotate
+        );
+        assert_eq!(
+            ErrorCategory::ModelUnavailable.rotation_action(),
+            FailureAction::Rotate
+        );
+        // Quarantine set.
+        assert_eq!(
+            ErrorCategory::InvalidCredential.rotation_action(),
+            FailureAction::Quarantine
+        );
+        assert_eq!(
+            ErrorCategory::PermissionDenied.rotation_action(),
+            FailureAction::Quarantine
+        );
+        // Stop set — timeout must never rotate (ambiguous execution).
+        assert_eq!(
+            ErrorCategory::Timeout.rotation_action(),
+            FailureAction::Stop
+        );
+        assert_eq!(
+            ErrorCategory::BillingOrQuota.rotation_action(),
+            FailureAction::Stop
+        );
+        assert_eq!(
+            ErrorCategory::InvalidRequest.rotation_action(),
+            FailureAction::Stop
+        );
+        assert_eq!(
+            ErrorCategory::ContextLimit.rotation_action(),
+            FailureAction::Stop
+        );
     }
 }

@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 sair-domain = { workspace = true }
 sair-vault = { workspace = true }
+sair-persistence = { workspace = true }
+sair-providers = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
@@ -20,6 +22,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
+url = "2"
 
 subtle = { workspace = true }
 
@@ -29,6 +33,7 @@ http-body-util = { workspace = true }
 reqwest = { workspace = true, default-features = false }
 rustls = { workspace = true }
 sair-vault = { workspace = true, features = ["mock"] }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

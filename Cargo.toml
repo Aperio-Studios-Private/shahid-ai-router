@@ -57,6 +57,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tower-http = { version = "0.6", features = ["timeout"] }
 base64 = "0.22"
 subtle = "2"
+zeroize = "1"
+wiremock = "0.6"
 
 # desktop shell (tauri-build is versioned independently of tauri)
 tauri = { version = "2.12", features = [] }

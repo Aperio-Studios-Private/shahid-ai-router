@@ -211,8 +211,14 @@ impl AppState {
             .get_setting(SETTING_GATEWAY)
             .await
             .map_err(|e| format!("db unavailable: {e}"))?;
+        // Protocol-surface dependencies: per-gateway ApiDeps (Phase 3).
+        let api = Arc::new(sair_gateway::api::ApiDeps::new(
+            self.db.clone(),
+            self.vault.clone(),
+        ));
         let mut config = GatewayConfig {
             token: Arc::new(token),
+            api: Some(api),
             ..GatewayConfig::default()
         };
         if let Some(obj) = settings {

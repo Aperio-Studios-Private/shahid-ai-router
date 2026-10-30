@@ -8,6 +8,8 @@
 
 pub mod adapter;
 pub mod http;
+pub mod openai;
 
 pub use adapter::{AdapterCapabilities, MockProvider, ProviderAdapter, ProviderId};
-pub use http::{SsrfError, SsrfPolicy, ValidatingResolver, build_client};
+pub use http::{SsrfCheckedClient, SsrfError, SsrfPolicy, ValidatingResolver, build_client};
+pub use openai::{ChatOutcome, MAX_RESPONSE_BYTES, send_chat};

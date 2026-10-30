@@ -3,6 +3,8 @@ import { SCREENS, type ScreenId } from "./lib/screens";
 import { invokeOr, type AppInfo } from "./lib/tauri";
 import { OverviewScreen } from "./screens/OverviewScreen";
 import { GatewayScreen } from "./screens/GatewayScreen";
+import { ProvidersScreen } from "./screens/ProvidersScreen";
+import { AliasesScreen } from "./screens/AliasesScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
 
 function useTheme(): [boolean, () => void] {
@@ -72,6 +74,10 @@ export default function App() {
           <OverviewScreen appInfo={appInfo} />
         ) : active === "gateway" ? (
           <GatewayScreen />
+        ) : active === "providers" || active === "api-keys" ? (
+          <ProvidersScreen />
+        ) : active === "routing" ? (
+          <AliasesScreen />
         ) : (
           <PlaceholderScreen
             title={SCREENS.find((s) => s.id === active)?.label ?? ""}

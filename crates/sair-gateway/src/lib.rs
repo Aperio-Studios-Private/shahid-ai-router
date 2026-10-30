@@ -12,7 +12,9 @@
 //!
 //! No CORS headers are emitted. The gateway binds `127.0.0.1` only.
 
+pub mod api;
 pub mod handle;
+pub mod routing;
 pub mod token;
 
 use std::sync::Arc;
@@ -72,9 +74,13 @@ pub fn router(config: &GatewayConfig) -> Router {
 pub(crate) fn router_with_state(config: &GatewayConfig, state: GatewayRuntimeState) -> Router {
     // axum applies layers outermost-last: the first `.layer` added is the
     // innermost. Request order = reverse of the order below.
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/healthz", get(health))
         .fallback(fallback_404);
+    // Protocol surfaces merge BEFORE the layers so auth/Host/limits apply.
+    if let Some(api) = &config.api {
+        router = router.merge(crate::api::router(api.clone()));
+    }
     #[cfg(test)]
     let router = {
         use axum::body::Bytes;
@@ -108,7 +114,9 @@ pub(crate) fn router_with_state(config: &GatewayConfig, state: GatewayRuntimeSta
         .layer(axum::extract::DefaultBodyLimit::max(
             config.body_limit_bytes,
         ))
-        .with_state(state)
+    // Note: the router's state type is `()` — middleware state is supplied
+    // via `from_fn_with_state`, and the API surface carries its own
+    // `Arc<ApiDeps>` state (merged above).
 }
 
 async fn health() -> impl IntoResponse {

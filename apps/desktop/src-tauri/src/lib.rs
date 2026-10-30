@@ -7,6 +7,7 @@
 //! hook is the drain caller named by review finding F-9).
 
 mod commands;
+mod commands_management;
 mod state;
 mod telemetry;
 
@@ -38,6 +39,25 @@ pub fn run() {
             commands::stop_gateway,
             commands::reveal_gateway_token,
             commands::regenerate_gateway_token,
+            commands_management::list_providers,
+            commands_management::add_provider,
+            commands_management::update_provider,
+            commands_management::set_provider_enabled,
+            commands_management::delete_provider,
+            commands_management::test_provider,
+            commands_management::list_credentials,
+            commands_management::add_credential,
+            commands_management::set_credential_status,
+            commands_management::delete_credential,
+            commands_management::list_deployments,
+            commands_management::add_model,
+            commands_management::add_deployment,
+            commands_management::set_deployment_enabled,
+            commands_management::delete_deployment,
+            commands_management::list_aliases,
+            commands_management::add_alias,
+            commands_management::bind_alias_deployment,
+            commands_management::delete_alias,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
