@@ -82,9 +82,13 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P8-T03 | Consent-gated apply (allowlist, hash precondition, symlink policy, atomic write, backup) | PASS |
 | P8-T04 | Agent Integrations UI + gate | PASS |
 
-## Phase 9 — UI completion (epic)
+## Phase 9 — UI completion (COMPLETE — see reports/phase-reports/phase-9.md)
 
-- All docs/08 screens, logs/usage/diagnostics, a11y checks, route preview.
+| ID | Task | Status |
+|---|---|---|
+| P9-T01 | Plan + independent review (REVISE BEFORE IMPLEMENTATION; F-1/F-2 resolved) | PASS |
+| P9-T02 | Records projection (secret-safe) + usage aggregates + no-route recording | PASS |
+| P9-T03 | Logs/Usage/Health screens + a11y (focus rings, aria, manual checklist) | PASS |
 
 ## Phase 10 — Backup/restore (epic)
 
