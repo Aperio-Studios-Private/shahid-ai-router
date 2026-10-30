@@ -17,6 +17,14 @@ body {
   @apply bg-zinc-50 text-zinc-900 antialiased;
 }
 
+/* docs/08: visible focus for keyboard navigation */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  @apply outline-none ring-2 ring-[#006eb9] ring-offset-1 dark:ring-sky-400;
+}
+
 .dark body {
   @apply bg-zinc-950 text-zinc-100;
 }

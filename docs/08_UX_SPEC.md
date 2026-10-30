@@ -4,7 +4,7 @@
 Professional developer utility: clean, compact, readable and information-dense. Light/dark themes. Avoid gratuitous 3D and decorative animation.
 
 ## Navigation
-Overview; Providers; API Keys; Models; Deployments; Routing Policies; Agent Integrations; Local Gateway; Request Logs; Usage; Health Monitor; Backup & Restore; Settings; About.
+Overview; Providers (includes API Keys, Models and Deployments — grouped per the Screens section below); Routing Policies & Aliases; Agent Integrations; Local Gateway; Request Logs; Usage; Health Monitor; Backup & Restore; Settings; About. (Amendment 2026-10-31, Phase 9: the originally separate Models/Deployments entries fold into Providers per the Screens grouping; Models/Deployments entries were internally inconsistent with that grouping.)
 
 ## Screens
 Dashboard: gateway state, endpoint, provider/credential health, aliases, request/error/latency summaries.

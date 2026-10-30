@@ -6,6 +6,9 @@ import { GatewayScreen } from "./screens/GatewayScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { AliasesScreen } from "./screens/AliasesScreen";
 import { AgentIntegrationsScreen } from "./screens/AgentIntegrationsScreen";
+import { LogsScreen } from "./screens/LogsScreen";
+import { UsageScreen } from "./screens/UsageScreen";
+import { HealthScreen } from "./screens/HealthScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
 
 function useTheme(): [boolean, () => void] {
@@ -81,6 +84,12 @@ export default function App() {
           <AliasesScreen />
         ) : active === "agent-integrations" ? (
           <AgentIntegrationsScreen />
+        ) : active === "logs" ? (
+          <LogsScreen />
+        ) : active === "usage" ? (
+          <UsageScreen />
+        ) : active === "health" ? (
+          <HealthScreen />
         ) : (
           <PlaceholderScreen
             title={SCREENS.find((s) => s.id === active)?.label ?? ""}

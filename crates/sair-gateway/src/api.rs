@@ -146,6 +146,30 @@ fn openai_error(status: StatusCode, code: &str, message: &str, extra: Value) -> 
 
 /// The protocol surface a request arrived on (Phase 6). Determines the
 /// protocol family, wire envelope, and upstream adapter.
+/// Phase 9 (F-1a): projects route exclusions into a decision-shaped JSON for
+/// no-route records (no candidates were selected, so no secret refs exist).
+fn decision_json_placeholder(
+    excluded: &[sair_persistence::repos::ExcludedCandidate],
+) -> Option<String> {
+    let exclusions: Vec<Value> = excluded
+        .iter()
+        .map(|x| {
+            serde_json::json!({
+                "deployment_id": x.deployment_id,
+                "credential_id": x.credential_id,
+                "reason": x.reason,
+            })
+        })
+        .collect();
+    Some(
+        serde_json::json!({
+            "decision": { "exclusions": exclusions },
+            "streamed": false,
+        })
+        .to_string(),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
     OpenAiChat,
@@ -675,6 +699,28 @@ async fn process_chat(
                     format!("strategy_{s}_not_implemented"),
                 ),
             };
+            // Phase 9 (F-1a): no-route requests are recorded too — the Logs
+            // screen must show the "everything unavailable" case.
+            if matches!(e, crate::routing::RouteError::NoEligibleDeployment) {
+                let record = RequestRecordInsert {
+                    id: correlation.clone(),
+                    ts: sair_persistence::time::now_iso(),
+                    correlation_id: correlation.clone(),
+                    protocol_family: Some(surface.label().to_string()),
+                    operation: Some(
+                        match operation {
+                            Operation::Chat => "chat",
+                            Operation::CountTokens => "count_tokens",
+                        }
+                        .to_string(),
+                    ),
+                    alias: Some(alias.to_string()),
+                    error_category: Some("no_eligible_deployment".to_string()),
+                    decision_json: decision_json_placeholder(&excluded),
+                    ..RequestRecordInsert::default()
+                };
+                let _ = api.db.repos().insert_request_record(&record).await;
+            }
             // F-4/F-8: count_tokens on an alias without an anthropic
             // deployment is a structured 501 (ADR-010).
             if operation == Operation::CountTokens

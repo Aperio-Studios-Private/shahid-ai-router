@@ -197,3 +197,32 @@ pub async fn apply_agent_profile(
     profile_apply::apply_content(&target, &content, expected_existing.as_deref())
         .map(|p| p.to_string_lossy().to_string())
 }
+
+#[tauri::command]
+pub async fn list_request_records(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+    alias_filter: Option<String>,
+    errors_only: Option<bool>,
+) -> Result<Vec<serde_json::Value>, String> {
+    state
+        .db
+        .repos()
+        .list_request_records(
+            limit.unwrap_or(100),
+            alias_filter.as_deref(),
+            errors_only.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn usage_summary(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    state
+        .db
+        .repos()
+        .usage_summary()
+        .await
+        .map_err(|e| e.to_string())
+}
