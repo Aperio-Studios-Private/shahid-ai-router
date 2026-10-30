@@ -7,5 +7,7 @@
 //! time (Phase 3).
 
 pub mod adapter;
+pub mod http;
 
 pub use adapter::{AdapterCapabilities, MockProvider, ProviderAdapter, ProviderId};
+pub use http::{SsrfError, SsrfPolicy, ValidatingResolver, build_client};

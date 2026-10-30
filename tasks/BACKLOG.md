@@ -13,16 +13,18 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P1-T05 | CI pipeline | GitHub Actions: matrix windows-latest + macos-latest; jobs = fmt+clippy, cargo test, frontend typecheck+vitest+build, tauri debug build; runs green on push | `.github/workflows/ci.yml` | PASS (file complete; cannot run until repo is hosted — same commands verified locally) |
 | P1-T06 | Phase 1 gate evidence | Full local build evidence (cargo build/test, npm build, tauri debug build, tool versions recorded); Phase 1 report in `reports/phase-reports/`; boards/traceability updated | `reports/phase-reports/phase-1.md` | IN_PROGRESS |
 
-## Phase 2 — Security & persistence (epic; decompose at phase entry)
+## Phase 2 — Security & persistence (COMPLETE — see reports/phase-reports/phase-2.md)
 
-- P2-T01 SQLite schema + embedded migrations + migration/recovery tests
-- P2-T02 SecretStore trait + Windows/macOS keyring impls + test mock + contract tests
-- P2-T03 Gateway token lifecycle + axum middleware stack (auth, Host allowlist, body limit, concurrency limit)
-- P2-T04 tracing + redaction-by-construction + redaction sweep tests
-- P2-T05 SSRF custom connect layer + denylist matrix tests (planning-audit §11 R-6)
-- P2-T06 Phase 2 gate: secret lifecycle evidence + security review
+| ID | Task | Status |
+|---|---|---|
+| P2-T01 | SQLite schema + embedded migrations + FK/retention/settings tests | PASS (13 tests) |
+| P2-T02 | OS vault impls (keyring v1; Windows Credential Manager verified live) + mock feature gate + release compile guard + shared contract tests | PASS (8 tests incl. OS contract) |
+| P2-T03 | Gateway token lifecycle + middleware stack (auth / Host allowlist / 503-at-capacity / 408-timeout / body limit) + GatewayHandle drain + app wiring + Gateway UI | PASS (17 tests + live smoke test) |
+| P2-T04 | Redaction formatter + sweep tests (fields, vault roundtrip, reveal path) + log rotation/pruning | PASS (3 tests) |
+| P2-T05 | SsrfPolicy (scheme + default-deny denylist) + validating resolver (offline rebinding tests) + no-cross-origin redirects | PASS (9 tests) |
+| P2-T06 | Phase gate: full suites, cargo audit (0 vulns; 5 informational Linux-stack warnings), threat-model addendum, security review, report | PASS |
 
-## Phase 3 — First vertical slice (epic; decompose at phase entry)
+## Phase 3 — First vertical slice (next; decompose at phase entry)
 
 - P3-T01 sair-domain types + error taxonomy + capability model (incl. protocol_family per ADR-009)
 - P3-T02 Provider adapter trait + OpenAI-compatible adapter (non-streaming) + wiremock contract tests

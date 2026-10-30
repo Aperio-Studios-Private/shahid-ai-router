@@ -20,3 +20,11 @@ Strict size/file/path/schema limits; defend against path traversal and decompres
 
 ## Privacy
 No account, cloud sync or telemetry by default. Prompt/response bodies are not logged by default. Network requests only for configured providers and explicitly enabled update/diagnostic features.
+
+## Threat-model addendum (Phase 2, 2026-10-31 — review finding F-12)
+New surfaces introduced by the security/persistence phase, with their mitigations:
+- **Local log files** — plaintext logs on disk are a leak vector. Mitigations: redaction-by-construction (secret values never enter spans), field-name rewrite layer (`[REDACTED]`) as defense-in-depth, logs under OS per-user app-data (inheriting user ACLs), daily rotation with 14-day pruning, no request/response bodies ever written, sweep tests asserting seeded key material never appears in any sink.
+- **Token-reveal IPC command** — the UI can obtain the gateway token on demand. Mitigations: masked by default with explicit reveal, never persisted in webview storage, never logged (sweep-tested), regeneration is consent-gated with client-impact warning, and old vault items are deleted after a crash-safe swap (create → persist ref → delete old).
+- **Degraded-start states** — vault or DB unavailable at startup. Mitigations: fail-closed (the gateway never starts without its token from the vault; startup aborts before bind on migration failure); explicit error state surfaced in the UI; no silent plaintext fallback (docs/06 Secrets).
+- **Malicious local clients** (in-scope since Phase 0) — added concrete bounds: immediate 503 at concurrency capacity (no unbounded queueing), per-request timeout budget (408), body size limit (413), Host allowlist, auth on every route including `/healthz` and 404s.
+- **Residual risks (documented, revalidated at Phase 11):** SSRF resolve-to-connect race minimized via validating-resolver design (ADR-015) but not provably eliminated; DNS-rebinding defended by Host allowlist for the *inbound* path.

@@ -45,13 +45,18 @@ tracing = "0.1"
 
 # persistence
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 
-# secrets (ADR-005)
-keyring = { version = "4.2", features = ["v1"] }
+# secrets (ADR-005) and crypto (ADR-006; ring 0.17 per review F-5).
+# keyring is declared locally in sair-vault (optional deps can't be workspace deps).
+ring = "0.17"
 
-# HTTP client (ADR-006: rustls + ring provider)
+# HTTP client (ADR-006: rustls + ring provider) and server middleware
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tower-http = { version = "0.6", features = ["timeout"] }
+base64 = "0.22"
+subtle = "2"
 
 # desktop shell (tauri-build is versioned independently of tauri)
 tauri = { version = "2.12", features = [] }

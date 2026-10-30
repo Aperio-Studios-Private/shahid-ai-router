@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { SCREENS, type ScreenId } from "./lib/screens";
 import { invokeOr, type AppInfo } from "./lib/tauri";
 import { OverviewScreen } from "./screens/OverviewScreen";
+import { GatewayScreen } from "./screens/GatewayScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
 
 function useTheme(): [boolean, () => void] {
@@ -69,6 +70,8 @@ export default function App() {
       <main className="flex-1 overflow-y-auto p-6">
         {active === "overview" ? (
           <OverviewScreen appInfo={appInfo} />
+        ) : active === "gateway" ? (
+          <GatewayScreen />
         ) : (
           <PlaceholderScreen
             title={SCREENS.find((s) => s.id === active)?.label ?? ""}

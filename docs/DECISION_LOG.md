@@ -89,3 +89,15 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Status: Accepted. Date: 2026-10-30 (per review finding R-9).
 - Decision: Windows 10+ x64 (WebView2 Evergreen); macOS 12+ x86_64/aarch64. Exact Tauri 2 minimums verified at Phase 1 build; docs/12 amended accordingly.
 - Revisit trigger: Tauri 2 minimum OS change.
+
+## ADR-015: SSRF enforcement via validating custom resolver
+- Status: Accepted. Date: 2026-10-31 (per Phase 2 review finding F-3; supersedes the connector-rewrite wording in ADR-011).
+- Context: reqwest 0.13 has no full connector replacement; rewriting the connect target to a validated IP breaks TLS SNI/certificate identity, and weakening verification is forbidden (SECURITY_RULES #6).
+- Decision: enforce SSRF policy in a custom `Resolve` implementation so resolution and validation happen together and only validated addresses are returned (reqwest connects exactly to resolver output — TOCTOU window minimized while TLS identity stays on the hostname). Redirects governed by `redirect::Policy::custom` (stop on host/scheme change, ≤3 same-host hops). Scheme policy and extended denylist live in `SsrfPolicy` (multicast/reserved/NAT64/6to4 added; default-deny unclassified).
+- Consequences: a residual resolve-to-connect race remains in the platform resolver path — documented, revalidated at Phase 11 security review.
+- Revisit trigger: reqwest providing first-class validated-connect APIs.
+
+## ADR-016: Vault contract-test evidence policy
+- Status: Accepted. Date: 2026-10-31 (per Phase 2 review finding F-8).
+- Decision: OS vault contract tests run on Windows locally and on CI (windows-latest Credential Manager, macos-latest Keychain); a green macOS CI run is accepted as macOS runtime evidence per ADR-013. If CI Keychain entitlement errors appear, the documented fallback is annotate + skip with the reason recorded in the phase report (never silently ignored). Reports state exactly which platform executed the vault contract tests. The owner's interactive macOS verification (scheduled 2026-11-01) remains the acceptance milestone for that platform.
+- Revisit trigger: CI environment changes affecting keychain availability.

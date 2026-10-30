@@ -5,15 +5,19 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# OS-backed store (Windows Credential Manager / macOS Keychain) via keyring 4.x.
+# App/release builds must enable this and must NOT enable `mock`.
+os = ["dep:keyring"]
+# Test-only in-memory store. Compile-error guard in lib.rs blocks release builds.
+mock = []
+
 [dependencies]
 sair-domain = { workspace = true }
 thiserror = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-windows-native-keyring-store = "1.1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = "1.0"
+ring = { workspace = true }
+keyring = { version = "4.2", features = ["v1"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
