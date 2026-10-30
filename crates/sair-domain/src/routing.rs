@@ -64,6 +64,8 @@ pub struct RouteCandidate {
     pub capabilities: CapabilityMetadata,
     pub credential_id: String,
     pub credential_secret_ref: String,
+    /// Account group (docs/05 Quota truth): BillingOrQuota cools the group.
+    pub credential_account_id: Option<String>,
     /// Ordering: alias-deployment priority (higher first).
     pub alias_priority: i64,
     /// Ordering: credential priority (higher first, within a deployment).

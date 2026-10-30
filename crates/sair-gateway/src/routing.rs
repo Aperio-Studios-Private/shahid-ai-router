@@ -192,6 +192,7 @@ mod tests {
             },
             credential_id: cred.to_string(),
             credential_secret_ref: format!("sair.cred.{cred}"),
+            credential_account_id: None,
             alias_priority: alias_p,
             credential_priority: cred_p,
             credential_weight: 1,

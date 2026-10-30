@@ -10,6 +10,7 @@
 //!   (docs/07, ADR-008).
 
 pub mod repos;
+pub mod repos_rotation;
 pub mod time;
 
 use std::str::FromStr;

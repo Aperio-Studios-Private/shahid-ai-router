@@ -13,6 +13,8 @@
 //! No CORS headers are emitted. The gateway binds `127.0.0.1` only.
 
 pub mod api;
+#[cfg(test)]
+mod api_rotation_tests;
 pub mod handle;
 pub mod routing;
 pub mod token;

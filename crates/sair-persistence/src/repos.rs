@@ -16,7 +16,7 @@ fn now() -> String {
     crate::time::now_iso()
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     // 16 random bytes hex from the OS CSPRNG (no extra dependency).
     use ring::rand::SecureRandom;
     let rng = ring::rand::SystemRandom::new();
@@ -114,7 +114,7 @@ pub struct AliasRow {
 }
 
 pub struct Repos<'a> {
-    pool: &'a SqlitePool,
+    pub(crate) pool: &'a SqlitePool,
 }
 
 impl Db {
@@ -643,6 +643,7 @@ pub async fn load_route_snapshot_detailed(
             capabilities,
             credential_id: row.credential_id.clone(),
             credential_secret_ref: row.secret_ref.clone(),
+            credential_account_id: row.account_id.clone(),
             alias_priority: row.alias_priority,
             credential_priority: row.credential_priority,
             credential_weight: row.credential_weight,
@@ -684,6 +685,7 @@ struct RawRow {
     credential_weight: i64,
     credential_status: String,
     cooldown_until: Option<String>,
+    account_id: Option<String>,
     alias_priority: i64,
 }
 
@@ -708,7 +710,7 @@ async fn raw_snapshot_rows(
                 m.model_id, m.protocol_family, m.capabilities,
                 c.id AS credential_id, c.secret_ref, c.priority AS credential_priority,
                 c.weight AS credential_weight, c.status AS credential_status,
-                c.cooldown_until
+                c.cooldown_until, c.account_id
          FROM alias_deployments ad
          JOIN deployments d ON d.id = ad.deployment_id
          JOIN providers p ON p.id = d.provider_id
@@ -748,6 +750,7 @@ async fn raw_snapshot_rows(
                 credential_weight: row.get("credential_weight"),
                 credential_status: row.get("credential_status"),
                 cooldown_until: row.get("cooldown_until"),
+                account_id: row.get("account_id"),
                 alias_priority: row.get("alias_priority"),
             },
             family,

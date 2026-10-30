@@ -8,6 +8,7 @@
 
 mod commands;
 mod commands_management;
+mod commands_rotation;
 mod state;
 mod telemetry;
 
@@ -58,6 +59,12 @@ pub fn run() {
             commands_management::add_alias,
             commands_management::bind_alias_deployment,
             commands_management::delete_alias,
+            commands_rotation::set_credential_priority_weight,
+            commands_rotation::list_provider_accounts,
+            commands_rotation::add_provider_account,
+            commands_rotation::assign_credential_account,
+            commands_rotation::list_health_events,
+            commands_rotation::credential_health_summary,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

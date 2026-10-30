@@ -95,6 +95,15 @@ pub async fn send_chat(
     let response = request.send().await.map_err(|e| classify_transport(&e))?;
 
     let status = response.status().as_u16();
+    // R4-04: standard HTTP Retry-After header (seconds form only; HTTP-date
+    // values ignored), capped at 3600 s so a hostile provider cannot freeze
+    // credentials long-term.
+    let header_retry_after: Option<u64> = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|s| s.min(3600));
     let bytes = response.bytes().await.map_err(|e| classify_transport(&e))?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err(UpstreamFailure {
@@ -126,7 +135,10 @@ pub async fn send_chat(
             body: parsed,
         })
     } else {
-        Err(classify(status, &parsed))
+        let mut failure = classify(status, &parsed);
+        failure.retry_after_secs = header_retry_after.or(failure.retry_after_secs);
+        failure.retry_after_secs = failure.retry_after_secs.map(|s| s.min(3600));
+        Err(failure)
     }
 }
 

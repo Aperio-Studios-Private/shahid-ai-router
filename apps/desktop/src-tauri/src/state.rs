@@ -211,10 +211,19 @@ impl AppState {
             .get_setting(SETTING_GATEWAY)
             .await
             .map_err(|e| format!("db unavailable: {e}"))?;
-        // Protocol-surface dependencies: per-gateway ApiDeps (Phase 3).
+        // Protocol-surface dependencies: per-gateway ApiDeps (Phase 3+4).
+        // FR-021: per-deployment concurrency bound; setting applies at
+        // gateway (re)start (R4-06).
+        let deployment_concurrency = settings
+            .as_ref()
+            .and_then(|o| o.get("deployment_concurrency"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok().filter(|c| *c >= 1))
+            .unwrap_or(4);
         let api = Arc::new(sair_gateway::api::ApiDeps::new(
             self.db.clone(),
             self.vault.clone(),
+            deployment_concurrency,
         ));
         let mut config = GatewayConfig {
             token: Arc::new(token),
