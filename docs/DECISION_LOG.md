@@ -100,6 +100,8 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Status: Accepted. Date: 2026-10-31 (per review finding R3-03/R3-04).
 - Decision: routing candidates are (alias-deployment, credential) pairs ordered by lexicographic priority (alias_deployments.priority, credentials.priority), weights from credential.weight; strategies priority/round_robin/weighted implemented; lru/manual_pin declared but rejected with structured 501 until implemented (honest incompleteness). Rotation state (per-alias round-robin counters, attempt bookkeeping) lives behind `tokio::sync::Mutex<RotationState>` with critical sections that never span awaits (ADR-012), verified by a deterministic 20-task concurrent test in Phase 3.
 - Revisit trigger: user need for lru/pin strategies.
+
+## ADR-015: SSRF enforcement via validating custom resolver
 - Status: Accepted. Date: 2026-10-31 (per Phase 2 review finding F-3; supersedes the connector-rewrite wording in ADR-011).
 - Context: reqwest 0.13 has no full connector replacement; rewriting the connect target to a validated IP breaks TLS SNI/certificate identity, and weakening verification is forbidden (SECURITY_RULES #6).
 - Decision: enforce SSRF policy in a custom `Resolve` implementation so resolution and validation happen together and only validated addresses are returned (reqwest connects exactly to resolver output — TOCTOU window minimized while TLS identity stays on the hostname). Redirects governed by `redirect::Policy::custom` (stop on host/scheme change, ≤3 same-host hops). Scheme policy and extended denylist live in `SsrfPolicy` (multicast/reserved/NAT64/6to4 added; default-deny unclassified).
