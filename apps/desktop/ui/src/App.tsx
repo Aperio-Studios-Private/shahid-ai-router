@@ -5,6 +5,7 @@ import { OverviewScreen } from "./screens/OverviewScreen";
 import { GatewayScreen } from "./screens/GatewayScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { AliasesScreen } from "./screens/AliasesScreen";
+import { AgentIntegrationsScreen } from "./screens/AgentIntegrationsScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
 
 function useTheme(): [boolean, () => void] {
@@ -78,6 +79,8 @@ export default function App() {
           <ProvidersScreen />
         ) : active === "routing" ? (
           <AliasesScreen />
+        ) : active === "agent-integrations" ? (
+          <AgentIntegrationsScreen />
         ) : (
           <PlaceholderScreen
             title={SCREENS.find((s) => s.id === active)?.label ?? ""}

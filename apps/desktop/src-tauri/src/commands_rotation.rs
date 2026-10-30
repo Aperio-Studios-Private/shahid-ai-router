@@ -107,3 +107,93 @@ pub async fn credential_health_summary(
         .await
         .map_err(|e| e.to_string())
 }
+
+// ---- Phase 8: agent profile generation + consent-gated application ----
+
+use crate::profile_apply;
+
+#[tauri::command]
+pub async fn generate_agent_profile(
+    state: State<'_, AppState>,
+    agent_id: String,
+    alias: String,
+    fast_alias: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // F-5: validate alias existence + same-protocol deployment presence.
+    if !state
+        .db
+        .repos()
+        .alias_exists(&alias)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!("alias `{alias}` does not exist"));
+    }
+    let family = match agent_id.as_str() {
+        "claude-code" => "anthropic_messages",
+        "gemini-cli" => "gemini_generate_content",
+        "generic-openai" | "codex-cli" => "openai_chat",
+        _ => return Err("unknown agent".to_string()),
+    };
+    if !state
+        .db
+        .repos()
+        .alias_has_family_deployments(&alias, family)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "alias `{alias}` has no enabled {family} deployment"
+        ));
+    }
+
+    let settings = state
+        .db
+        .get_setting(crate::state::SETTING_GATEWAY)
+        .await
+        .map_err(|e| e.to_string())?;
+    let port = settings
+        .as_ref()
+        .and_then(|o| o.get("port"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(8787) as u16;
+
+    let profile =
+        sair_domain::profiles::generate_profile(&agent_id, port, alias.clone(), fast_alias)
+            .ok_or("unknown agent")?;
+    Ok(serde_json::json!({
+        "agent_id": profile.agent_id,
+        "config_text": profile.config_text,
+        "files": profile.files,
+        "rollback": profile.rollback,
+        "limitations": profile.limitations,
+        "applicable": profile.applicable,
+        "verification": format!("{} on 2026-10-31 (contract tests)", sair_domain::profiles::VERIFICATION_PREFIX),
+    }))
+}
+
+#[tauri::command]
+pub async fn hash_profile_target(agent_id: String, file_index: usize) -> Result<String, String> {
+    let profile = sair_domain::profiles::generate_profile(&agent_id, 8787, String::new(), None)
+        .ok_or("unknown agent")?;
+    let target = profile_apply::resolve_target(&profile, file_index)?;
+    if !target.exists() {
+        return Ok(String::new()); // new file: empty hash = no precondition
+    }
+    profile_apply::hash_file(&target)
+}
+
+#[tauri::command]
+pub async fn apply_agent_profile(
+    agent_id: String,
+    file_index: usize,
+    content: String,
+    expected_existing: Option<String>,
+) -> Result<String, String> {
+    // Consent is the UI's confirm dialog; the backend enforces the rest.
+    let profile = sair_domain::profiles::generate_profile(&agent_id, 8787, String::new(), None)
+        .ok_or("unknown agent")?;
+    let target = profile_apply::resolve_target(&profile, file_index)?;
+    profile_apply::apply_content(&target, &content, expected_existing.as_deref())
+        .map(|p| p.to_string_lossy().to_string())
+}

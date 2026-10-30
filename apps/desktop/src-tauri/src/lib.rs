@@ -9,6 +9,7 @@
 mod commands;
 mod commands_management;
 mod commands_rotation;
+mod profile_apply;
 mod state;
 mod telemetry;
 
@@ -66,6 +67,9 @@ pub fn run() {
             commands_rotation::assign_credential_account,
             commands_rotation::list_health_events,
             commands_rotation::credential_health_summary,
+            commands_rotation::generate_agent_profile,
+            commands_rotation::hash_profile_target,
+            commands_rotation::apply_agent_profile,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

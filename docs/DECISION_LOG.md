@@ -65,8 +65,8 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Revisit trigger: user demand + verified translation design post-v1.
 
 ## ADR-010: Protocol surfaces (v1) and agent constraints
-- Status: Accepted. Date: 2026-10-30 (per review finding R-2).
-- Decision: OpenAI surface = `POST /v1/chat/completions`, `GET /v1/models`; Anthropic surface = `POST /v1/messages`, `POST /v1/messages/count_tokens` (proxied for Anthropic upstreams; structured 501 otherwise); Gemini surface = `models/{model}:generateContent` (+`:streamGenerateContent`). `/v1/responses` out of scope v1; Codex CLI profiles pin `wire_api="chat"` (verified Phase 8).
+- Status: Accepted. Date: 2026-10-30 (per review finding R-2); AMENDED 2026-10-31 (Phase 8 review F-1).
+- Decision: OpenAI surface = `POST /v1/chat/completions`, `GET /v1/models`; Anthropic surface = `POST /v1/messages`, `POST /v1/messages/count_tokens` (proxied for Anthropic upstreams; structured 501 otherwise); Gemini surface = `models/{model}:generateContent` (+`:streamGenerateContent`). `/v1/responses` out of scope v1. AMENDMENT: current Codex CLI removed `wire_api="chat"` (hard config error; the responses wire API is the only supported value) — Codex is documented-UNSUPPORTED in v1 (needs /v1/responses, post-v1 candidate); no Codex generator ships.
 - Revisit trigger: verified agent requirements at Phase 8.
 
 ## ADR-011: Gateway request hardening

@@ -26,7 +26,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 rustls = { workspace = true }
+ring = { workspace = true }
 chrono = { workspace = true }
+dirs = "5"
+tempfile = "3"
 reqwest = { workspace = true }
 url = "2"
 

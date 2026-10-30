@@ -248,3 +248,42 @@ impl Repos<'_> {
         Ok(())
     }
 }
+
+impl Repos<'_> {
+    /// Phase 8 (F-5): validates that an alias exists and has enabled
+    /// deployments of the given protocol family.
+    ///
+    /// # Errors
+    /// DB failures.
+    pub async fn alias_has_family_deployments(
+        &self,
+        alias: &str,
+        protocol_family: &str,
+    ) -> Result<bool, DbError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM alias_deployments ad
+             JOIN deployments d ON d.id = ad.deployment_id
+             JOIN models m ON m.id = d.model_id
+             JOIN providers p ON p.id = d.provider_id
+             WHERE ad.alias_id = (SELECT id FROM model_aliases WHERE alias = ?1)
+               AND m.protocol_family = ?2 AND d.enabled = 1 AND p.enabled = 1",
+        )
+        .bind(alias)
+        .bind(protocol_family)
+        .fetch_one(self.pool)
+        .await?;
+        Ok(count > 0)
+    }
+
+    /// Phase 8: alias existence check.
+    ///
+    /// # Errors
+    /// DB failures.
+    pub async fn alias_exists(&self, alias: &str) -> Result<bool, DbError> {
+        let row: Option<i64> = sqlx::query_scalar("SELECT 1 FROM model_aliases WHERE alias = ?1")
+            .bind(alias)
+            .fetch_optional(self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+}

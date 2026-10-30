@@ -6,5 +6,6 @@
 //! routing policy and capability types.
 
 pub mod error;
+pub mod profiles;
 pub mod protocol;
 pub mod routing;
