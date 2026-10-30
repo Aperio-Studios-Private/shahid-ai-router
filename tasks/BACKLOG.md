@@ -37,9 +37,18 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 
 ## Phase 4 — Rotation & health (next; decompose at phase entry)
 
-## Phase 4 — Rotation & health (epic)
+## Phase 4 — Rotation & health (COMPLETE — see reports/phase-reports/phase-4.md)
 
-- Credential pool metadata, health/cooldown state (ADR-012 mechanism), error classification, account grouping, simulated failure suite incl. concurrent rotation tests.
+| ID | Task | Status |
+|---|---|---|
+| P4-T01 | Plan + independent review (R4-01..R4-09 resolved) | PASS |
+| P4-T02 | Account-group cooldown (quota truth) + monotonic writes | PASS |
+| P4-T03 | FR-021 per-deployment semaphores + actual-attempt accounting | PASS |
+| P4-T04 | Health-event mapping fix (R4-01) + read-back tests + summary commands | PASS |
+| P4-T05 | Retry-After header parse + caps (R4-04); credential dedupe (R4-02) | PASS |
+| P4-T06 | Deterministic simulated failure suite (5 scenarios) + gate | PASS |
+
+## Phase 5 — OpenRouter + aliases (next; decompose at phase entry)
 
 ## Phase 5 — OpenRouter + aliases (epic)
 
