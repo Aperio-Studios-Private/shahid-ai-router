@@ -10,4 +10,5 @@
 - **Phase 5 (OpenRouter + capability matrix) — COMPLETE, gate PASS** (reports/phase-reports/phase-5.md). 100 tests green.
 - **Phase 6 (native Anthropic + Gemini surfaces) — COMPLETE, gate PASS** (reports/phase-reports/phase-6.md). 118 tests green.
 - **Phase 7 (streaming) — COMPLETE, gate PASS** (reports/phase-reports/phase-7.md). 123 tests green.
-- Next: Phase 8 entry (agent profiles) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).
+- **Phase 8 (agent profiles) — COMPLETE, gate PASS** (reports/phase-reports/phase-8.md). Codex documented-unsupported (upstream removed chat wire API). 132 tests green.
+- Next: Phase 9 entry (UI completion) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).

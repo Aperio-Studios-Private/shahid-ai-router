@@ -18,7 +18,7 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 | FR-010 | Streaming | 7 | P7 (SSE relay + commit boundary) | reports/phase-reports/phase-7.md | Implemented (stream token counts NULL — FR-011 residual; raw-TCP scenarios Phase 11) |
 | FR-011 | Request history | 3 | P3-T04 | reports/phase-reports/phase-3.md | Implemented (metadata + decision JSON) |
 | FR-012 | Health diagnostics | 4+ | P3 + P4 (events/summary) | reports/phase-reports/phase-4.md | Implemented (UI Phase 9) |
-| FR-013 | Agent profiles | 8 | Phase 8 epic | TBD | Planned |
+| FR-013 | Agent profiles | 8 | P8 (generators + consent-gated apply) | reports/phase-reports/phase-8.md | Implemented (Codex unsupported by upstream — documented; live CLI verification pending) |
 | FR-014 | Backup/restore | 10 | Phase 10 epic | TBD | Planned |
 | FR-015 | Lifecycle | 1+ | P1-T04 (skeleton), P2-T03 | reports/phase-reports/phase-2.md | Implemented (start/stop/drain/exit hook) |
 | FR-016 | Redacted diagnostics | 2+ | P2-T04 | reports/phase-reports/phase-2.md | Implemented (redaction + sweep tests) |

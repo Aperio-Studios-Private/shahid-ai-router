@@ -73,9 +73,14 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P7-T03 | Handler commit boundary + PermitStream (FR-021) + streamed records (F-5) | PASS |
 | P7-T04 | 5 E2E streaming tests + gate | PASS |
 
-## Phase 8 — Agent profiles (epic)
+## Phase 8 — Agent profiles (COMPLETE — see reports/phase-reports/phase-8.md)
 
-- Profile generation for Codex CLI (`wire_api="chat"`), Claude Code, Gemini CLI; consent-gated external edits; verified per documented agent versions.
+| ID | Task | Status |
+|---|---|---|
+| P8-T01 | Plan + independent review (2 High resolved: Codex removal, apply hardening) | PASS |
+| P8-T02 | Profile generators (Claude Code / Gemini CLI / generic; Codex documented-unsupported) | PASS |
+| P8-T03 | Consent-gated apply (allowlist, hash precondition, symlink policy, atomic write, backup) | PASS |
+| P8-T04 | Agent Integrations UI + gate | PASS |
 
 ## Phase 9 — UI completion (epic)
 
