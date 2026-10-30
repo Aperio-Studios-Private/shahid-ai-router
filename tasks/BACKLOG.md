@@ -54,9 +54,15 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 
 - OpenRouter adapter (attribution headers per docs/04 research), alias/capability resolution matrix tests.
 
-## Phase 6 — Anthropic + Gemini native surfaces (epic)
+## Phase 6 — Anthropic + Gemini native surfaces (COMPLETE — see reports/phase-reports/phase-6.md)
 
-- `/v1/messages` + `/v1/messages/count_tokens`, Gemini generateContent surfaces, protocol contract tests; re-verify Gemini classic-vs-Interactions decision.
+| ID | Task | Status |
+|---|---|---|
+| P6-T01 | Plan + independent review (F-1..F-11 resolved, external API verifications) | PASS |
+| P6-T02 | Anthropic adapter (messages + count_tokens + classification matrix) | PASS |
+| P6-T03 | Gemini adapter (generateContent + RESOURCE_EXHAUSTED quota-truth + RetryInfo) | PASS |
+| P6-T04 | Family-parameterized handler (envelopes per family, status preservation F-1, pre-route validation F-6) | PASS |
+| P6-T05 | Surface E2E suite (9 tests) + gate | PASS |
 
 ## Phase 7 — Streaming (epic)
 
