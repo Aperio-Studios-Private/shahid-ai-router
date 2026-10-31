@@ -24,3 +24,34 @@ All notable changes to Shahid AI Router. Format: Keep a Changelog; versioning: S
 
 ### Added (Phase 3 — First vertical slice)
 - OpenAI-compatible `/v1/chat/completions` (non-streaming passthrough) and `/v1/models`; body-aware error classification (ADR-017: 429+insufficient_quota = billing, not rate-limit); routing engine v0 (priority/round-robin/weighted, cooldown, quarantine; lru/pin → structured 501) with deterministic concurrent-rotation tests; request records with full routing decisions (FR-012); management IPC + Providers/Aliases UI; secrets vault-backed, deleted with credentials.
+
+### Added (Phase 4 — Rotation & health)
+- Account-group cooldown for billing/quota failures (docs/05 quota truth; monotonic single-statement writes); per-deployment concurrency semaphores (FR-021; busy deployments rotate past without consuming attempts); Retry-After from HTTP header + body, capped 3600 s; per-request credential dedupe; health-event persistence fix + read-back tests; deterministic simulated failure suite.
+
+### Added (Phase 5 — OpenRouter + capability matrix)
+- OpenRouter attribution headers (documented `HTTP-Referer` + `X-Title`, dispatched only to openrouter providers); request-derived capability requirements (tools → tool_calling; response_format json_object/json_schema → structured_output) applied by the router with exclusion reasons in 503s; model capability editing.
+
+### Added (Phase 6 — Native Anthropic + Gemini surfaces)
+- Anthropic `/v1/messages` + `/v1/messages/count_tokens` (client anthropic-version forwarded, pinned legacy default); Gemini `models/{alias}:generateContent` (+ `:streamGenerateContent`); per-family error envelopes; same-protocol upstream status preservation; RESOURCE_EXHAUSTED defaults to billing/quota (with RetryInfo retryDelay parsing); DEADLINE_EXCEEDED/timeout_error never rotate; `?key=` query auth rejected.
+
+### Added (Phase 7 — Streaming)
+- SSE pass-through for all three surfaces via dedicated streaming clients (no total deadline — connect + idle-read bounds); stream-commit boundary structural (no failover after bytes flow); deployment permit held for the stream lifetime; streamed records flagged; 5 E2E streaming tests.
+
+### Added (Phase 8 — Agent profiles)
+- Profile generators for Claude Code, Gemini CLI, and generic OpenAI-compatible clients; OpenAI Codex CLI documented-UNSUPPORTED in v1 (ADR-010 amendment: upstream removed the chat wire API); consent-gated config application with closed allowlist, SHA-256 hash precondition (TOCTOU), symlink rejection, atomic writes, timestamped backups; Agent Integrations UI.
+
+### Added (Phase 9 — UI completion)
+- Request Logs (filters, correlation IDs, expandable routing-decision exclusions, retention footer), Usage aggregates (24h/7d), Health Monitor with human status explanations; no-route requests recorded; secret-safe server-side decision projection (vault refs never reach the webview); focus-visible + aria improvements.
+
+### Added (Phase 10 — Backup/restore)
+- `.sair` versioned container: config-only mode (credential metadata incomplete, no secret_ref; settings allowlist) and encrypted mode (Argon2id 64 MiB/t=3/p=1 + AES-256-GCM, metadata AAD); tx-scoped import with natural-key conflict skipping and backend vault re-store (no secrets through IPC); lost-passphrase warning; size cap + tamper/integrity rejection.
+
+### Added (Phase 11 — Hardening)
+- Deferred raw-TCP streaming scenarios (stalled upstream closed within configurable idle-read timeout; DrainTimedOut abort path); paired-delta p99 latency budget (< 25 ms advisory); in-flight counter relocated outside the tower stack (timeout-layer leak fix) with hyper-util graceful drain of idle keep-alive connections; CycloneDX SBOMs + release checksum archived; `npm audit` + `cargo audit` (0 vulnerabilities) in the pipeline.
+
+### Known limitations (v1, all recorded in reports/phase-reports/)
+- Streaming token counts are NULL (SSE frame parsing post-v1).
+- OpenAI Codex CLI unsupported (requires `/v1/responses`); `/v1/responses` surface post-v1.
+- Vision requirement detection and context_window enforcement deferred.
+- Live opt-in tests against real providers/CLIs not executed (no external credentials in the build environment).
+- CI execution pending GitHub Actions billing fix (tasks/BLOCKED.md B-01); macOS verification pending (ADR-016).

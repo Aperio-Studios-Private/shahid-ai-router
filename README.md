@@ -1,22 +1,63 @@
-# Shahid AI Router — Documentation & Agent Starter Pack
+# Shahid AI Router
 
-This is a planning/specification pack, not application source code. Extract it into the root of a new repository.
+A local-first, cross-platform desktop application and local HTTP gateway that manages
+multiple AI providers, multiple credentials per provider, model deployments and routing
+policies — so AI coding agents connect to **one stable authenticated loopback endpoint**
+while the gateway selects eligible upstream deployments, rotates credentials, and
+survives provider failures.
 
-Start with:
-1. `docs/00_PROJECT_CHARTER.md`
-2. `docs/01_PRD.md`
-3. `docs/02_ARCHITECTURE.md`
-4. `docs/03_TECH_STACK.md`
-5. `docs/04_PROVIDER_PROTOCOLS.md`
-6. `docs/05_ROUTING_FAILOVER.md`
-7. `docs/06_SECURITY_PRIVACY.md`
-8. `docs/07_DATA_STORAGE.md`
-9. `docs/08_UX_SPEC.md`
-10. `docs/09_AGENT_INTEGRATIONS.md`
-11. `docs/10_BACKUP_RESTORE.md`
-12. `docs/11_TESTING_QUALITY.md`
-13. `docs/12_BUILD_RELEASE.md`
-14. `docs/13_ROADMAP.md`
-15. Follow every mandatory instruction in `.agent/`.
+**Status:** v1 code-complete (all 11 roadmap phases). See [HANDOFF.md](HANDOFF.md) for
+the current state, residuals, and owner actions.
 
-The coding agent must verify current official documentation, stable versions, licenses, security advisories and platform compatibility before implementation. No application code is included.
+## What it does
+
+| Surface | Endpoints |
+|---|---|
+| OpenAI-compatible (incl. OpenRouter) | `POST /v1/chat/completions`, `GET /v1/models` |
+| Anthropic native | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
+| Gemini native | `POST /v1beta/models/{alias}:generateContent` (+ `:streamGenerateContent`) |
+
+- Non-streaming and SSE streaming, with the failover boundary at stream commitment
+- Capability-aware routing: aliases map to deployments filtered by protocol family and
+  request capabilities; strategies: priority, round-robin, weighted
+- Credential rotation with cooldowns, quarantine, and account-group quota truth
+  (billing/quota failures cool the whole account group — never burn shared keys)
+- Secrets only in the OS vault (Windows Credential Manager / macOS Keychain); the
+  database stores opaque references
+- Metadata-only request history with full routing-decision records ("why was this
+  deployment unavailable") and a 30-day retention policy
+- `.sair` config-only and encrypted (Argon2id + AES-256-GCM) backups
+- Agent profiles for Claude Code, Gemini CLI, and generic OpenAI-compatible clients
+- SSRF hardening (validating resolver + literal/scheme checks), token auth with
+  constant-time comparison, Host allowlist, per-request timeout, per-deployment
+  concurrency bounds, redacted telemetry
+
+## Quick start
+
+See [HANDOFF.md](HANDOFF.md) §5 for full setup. Short version:
+
+```bash
+cargo test --workspace                 # 139 tests
+cd apps/desktop/ui && npm install && npm test && npm run build
+cd ../.. && cargo run -p shahid-ai-router
+```
+
+The gateway autostarts on `127.0.0.1:8787` (loopback only, token-authenticated —
+reveal/copy the token in the app's Local Gateway screen).
+
+## Layout
+
+- `crates/` — Rust workspace: `sair-domain`, `sair-persistence`, `sair-vault`,
+  `sair-providers`, `sair-gateway`; the Tauri shell lives in `apps/desktop/src-tauri`
+- `apps/desktop/ui` — React 19 + Vite + Tailwind 4 frontend
+- `docs/` — charter, PRD, specs, ADRs (`DECISION_LOG.md`), traceability matrix, SBOMs
+- `reports/`, `audits/`, `tasks/` — phase-gate evidence, independent reviews, boards
+- `.agent/` — binding agent workflow rules
+
+## Platform support
+
+Windows 10+ x64 and macOS 12+ (x86_64/aarch64). Linux is not a supported platform for v1.
+
+## License
+
+Proprietary — see [LICENSE](LICENSE). Choose a distribution license before publishing.
