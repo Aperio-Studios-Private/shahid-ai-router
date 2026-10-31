@@ -18,7 +18,7 @@ pub use anthropic::send_messages_streaming;
 pub use gemini::generate_content_streaming;
 pub use http::{
     SsrfCheckedClient, SsrfError, SsrfPolicy, ValidatingResolver, build_client,
-    build_streaming_client,
+    build_streaming_client, build_streaming_client_with_idle_timeout,
 };
 pub use openai::{
     ChatOutcome, MAX_RESPONSE_BYTES, is_header_safe, send_chat, send_chat_with_headers,

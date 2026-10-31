@@ -14,6 +14,8 @@
 
 pub mod api;
 #[cfg(test)]
+mod api_phase11_tests;
+#[cfg(test)]
 mod api_phase5_tests;
 #[cfg(test)]
 mod api_phase6_tests;
@@ -36,6 +38,19 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde_json::json;
 use tower_http::timeout::TimeoutLayer;
+
+/// Waits until the live handler count reaches zero (drain semantics,
+/// FR-017: idle keep-alive connections close at drain; only handlers are
+/// awaited).
+pub(crate) async fn wait_for_in_flight_idle(counter: &std::sync::atomic::AtomicUsize) {
+    loop {
+        let count = counter.load(std::sync::atomic::Ordering::SeqCst);
+        if count == 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
 
 pub use handle::{GatewayConfig, GatewayHandle};
 pub use token::TokenManager;
@@ -205,6 +220,10 @@ async fn token_auth(
     let provided = extract_token(&headers);
     let expected = state.expected_token.read().await.clone();
     if token::verify_token(provided, &expected) {
+        // Phase 11: in-flight counting lives in handle.rs's service_fn — the
+        // timeout layer can hold this middleware future beyond the response,
+        // which would leak a middleware-level counter (found via the paired
+        // latency test).
         next.run(req).await
     } else {
         (

@@ -28,7 +28,9 @@ use sair_providers::gemini::generate_content_streaming;
 use sair_providers::openai::{
     ChatOutcome, StreamStart, send_chat, send_chat_streaming_with_headers, send_chat_with_headers,
 };
-use sair_providers::{SsrfCheckedClient, SsrfPolicy, build_client, build_streaming_client};
+use sair_providers::{
+    SsrfCheckedClient, SsrfPolicy, build_client, build_streaming_client_with_idle_timeout,
+};
 
 /// Maps a classification to a schema-legal `health_events.event` value
 /// (R4-01: the CHECK constraint allows only the listed events).
@@ -72,15 +74,23 @@ impl ApiDeps {
         vault: Arc<dyn SecretStore>,
         deployment_concurrency: usize,
         openrouter_attribution: sair_providers::openrouter::AttributionConfig,
+        upstream_idle_read_ms: u64,
     ) -> Self {
+        let idle = std::time::Duration::from_millis(upstream_idle_read_ms.max(1));
         Self {
             db,
             vault,
             rotation: Arc::new(RotationState::new()),
             client_strict: build_client(SsrfPolicy::default()),
             client_loopback: build_client(SsrfPolicy::allow_loopback()),
-            client_strict_streaming: build_streaming_client(SsrfPolicy::default()),
-            client_loopback_streaming: build_streaming_client(SsrfPolicy::allow_loopback()),
+            client_strict_streaming: build_streaming_client_with_idle_timeout(
+                SsrfPolicy::default(),
+                idle,
+            ),
+            client_loopback_streaming: build_streaming_client_with_idle_timeout(
+                SsrfPolicy::allow_loopback(),
+                idle,
+            ),
             deployment_concurrency: deployment_concurrency.max(1),
             openrouter_attribution,
             semaphores: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -1393,7 +1403,7 @@ mod tests {
             .await
             .unwrap();
 
-        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default()));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,

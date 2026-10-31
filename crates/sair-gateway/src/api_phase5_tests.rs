@@ -78,7 +78,7 @@ mod phase5_tests {
                 .unwrap();
         }
 
-        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default()));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,
@@ -297,7 +297,7 @@ mod phase5_tests {
             referer: Some("https://myapp.example".to_string()),
             title: Some("My App".to_string()),
         };
-        let api = Arc::new(ApiDeps::new(db, vault, 4, attribution));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, attribution, 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,

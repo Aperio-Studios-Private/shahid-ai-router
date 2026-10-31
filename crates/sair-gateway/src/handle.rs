@@ -35,6 +35,9 @@ pub struct GatewayConfig {
     pub timeout_ms: u64,
     /// Per-connection header-read timeout in ms; slowloris bound (SEC2-03).
     pub header_timeout_ms: u64,
+    /// Upstream streaming idle-read timeout in ms (F-1: bounds stalled
+    /// upstreams during streaming; default 300s).
+    pub upstream_idle_read_ms: u64,
     /// Protocol-surface dependencies (Phase 3+). `None` = gateway serves
     /// health only.
     pub api: Option<Arc<crate::api::ApiDeps>>,
@@ -49,6 +52,7 @@ impl Default for GatewayConfig {
             concurrency: 16,
             timeout_ms: 120_000,
             header_timeout_ms: 10_000,
+            upstream_idle_read_ms: 300_000,
             api: None,
         }
     }
@@ -90,6 +94,7 @@ impl GatewayHandle {
             source,
         })?;
         let token = Arc::new(tokio::sync::RwLock::new(config.token.clone()));
+        let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let state = crate::GatewayRuntimeState {
             expected_token: token.clone(),
             permits: Arc::new(tokio::sync::Semaphore::new(config.concurrency)),
@@ -108,14 +113,29 @@ impl GatewayHandle {
                     accepted = listener.accept() => match accepted {
                         Ok((stream, _peer)) => {
                             let app = app.clone();
+                            let in_flight = in_flight.clone();
                             let mut conn = builder.clone();
                             connections.spawn(async move {
                                 use tower::ServiceExt as _;
                                 let service = hyper::service::service_fn(
                                     move |req: hyper::Request<hyper::body::Incoming>| {
                                         let app = app.clone();
+                                        let in_flight = in_flight.clone();
                                         async move {
-                                            app.oneshot(req.map(axum::body::Body::new)).await
+                                            // Phase 11: the counter lives OUTSIDE the
+                                            // tower stack — the timeout layer can hold
+                                            // the middleware future beyond the response,
+                                            // which would break a middleware-level counter.
+                                            in_flight
+                                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                            let response = app
+                                                .oneshot(req.map(axum::body::Body::new))
+                                                .await;
+                                            in_flight.fetch_sub(
+                                                1,
+                                                std::sync::atomic::Ordering::SeqCst,
+                                            );
+                                            response
                                         }
                                     },
                                 );
@@ -141,13 +161,22 @@ impl GatewayHandle {
                     },
                 }
             }
-            // Drain: give in-flight connections a bounded window (FR-017);
-            // the outer stop(grace) still bounds total shutdown time.
+            // Drain (FR-017): wait for in-flight requests to complete (the
+            // runtime in-flight counter tracks handlers, not idle keep-alive
+            // connections), then close the remaining idle connections. The
+            // outer stop(grace) bounds total shutdown time.
             drop(listener);
-            let _ = tokio::time::timeout(Duration::from_secs(30), async {
-                while connections.join_next().await.is_some() {}
-            })
+            eprintln!(
+                "DEBUG drain start in_flight={}",
+                in_flight.load(std::sync::atomic::Ordering::SeqCst)
+            );
+            let _ = tokio::time::timeout(
+                Duration::from_secs(30),
+                crate::wait_for_in_flight_idle(&in_flight),
+            )
             .await;
+            connections.abort_all();
+            let _ = connections.join_all().await;
             if accept_failed {
                 tracing::error!("gateway server task ended after accept failure");
             }
@@ -206,6 +235,7 @@ mod tests {
             concurrency,
             timeout_ms,
             header_timeout_ms: 5_000,
+            upstream_idle_read_ms: 300_000,
             api: None,
         }
     }

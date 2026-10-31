@@ -324,6 +324,16 @@ impl SsrfCheckedClient {
 /// and `read_timeout` (idle between reads, client-level in reqwest 0.13).
 #[must_use]
 pub fn build_streaming_client(policy: SsrfPolicy) -> SsrfCheckedClient {
+    build_streaming_client_with_idle_timeout(policy, std::time::Duration::from_secs(300))
+}
+
+/// As [`build_streaming_client`], with an explicit idle-read timeout for
+/// tests of stalled upstreams (Phase 11).
+#[must_use]
+pub fn build_streaming_client_with_idle_timeout(
+    policy: SsrfPolicy,
+    idle_read: std::time::Duration,
+) -> SsrfCheckedClient {
     let redirect_policy = policy.clone();
     let inner = reqwest::Client::builder()
         .dns_resolver(Arc::new(ValidatingResolver::new(policy.clone())))
@@ -346,7 +356,7 @@ pub fn build_streaming_client(policy: SsrfPolicy) -> SsrfCheckedClient {
             }
         }))
         .connect_timeout(std::time::Duration::from_secs(30))
-        .read_timeout(std::time::Duration::from_secs(300))
+        .read_timeout(idle_read)
         .build()
         .expect("streaming client must build; static policy and resolver only");
     SsrfCheckedClient {

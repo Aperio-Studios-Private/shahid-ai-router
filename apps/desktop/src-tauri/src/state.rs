@@ -228,11 +228,17 @@ impl AppState {
             .flatten()
             .and_then(|v| sair_providers::openrouter::AttributionConfig::from_value(Some(&v)))
             .unwrap_or_default();
+        let upstream_idle_read_ms = settings
+            .as_ref()
+            .and_then(|o| o.get("upstream_idle_read_ms"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(300_000);
         let api = Arc::new(sair_gateway::api::ApiDeps::new(
             self.db.clone(),
             self.vault.clone(),
             deployment_concurrency,
             attribution,
+            upstream_idle_read_ms,
         ));
         let mut config = GatewayConfig {
             token: Arc::new(token),

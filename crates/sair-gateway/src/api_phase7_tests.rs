@@ -74,7 +74,7 @@ mod phase7_tests {
             .await
             .unwrap();
 
-        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default()));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,
@@ -254,7 +254,7 @@ mod phase7_tests {
             .bind_deployment(&alias_id, &deployment_id, 10)
             .await
             .unwrap();
-        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default()));
+        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,
@@ -345,7 +345,7 @@ mod phase7_tests {
                 .unwrap();
             deployment_ids.push(deployment_id);
         }
-        let api = Arc::new(ApiDeps::new(db, vault, 1, Default::default()));
+        let api = Arc::new(ApiDeps::new(db, vault, 1, Default::default(), 300_000));
         let config = GatewayConfig {
             token: Arc::new(TOKEN.as_bytes().to_vec()),
             port: 0,
