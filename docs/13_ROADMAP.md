@@ -13,4 +13,6 @@ Phase 9 UI, logs, usage and diagnostics. Gate: E2E/accessibility.
 Phase 10 Backup/restore. Gate: encrypted and cross-platform restore tests.
 Phase 11 Hardening/release. Gate: security, performance and clean-install checklist.
 
+Status (2026-10-31): Phases 0-11 are COMPLETE — per-phase evidence in `reports/phase-reports/phase-1..11.md` (Phase 0 evidence lives in `audits/planning/planning-audit.md`). Phase 11 closed as "code-complete with residuals"; release tagging awaits the owner's waiver of the BLOCKED items (tasks/BLOCKED.md). An independent audit the same day found and fixed UI/backup/CI defects — see `reports/phase-reports/audit-fixes.md`.
+
 Each feature must independently pass `.agent/WORKFLOW_RULES.md` before the next feature begins.

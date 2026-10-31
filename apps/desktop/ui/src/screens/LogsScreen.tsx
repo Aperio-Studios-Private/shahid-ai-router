@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invokeOr } from "../lib/tauri";
 
 interface RecordRow {
@@ -37,26 +37,48 @@ export function LogsScreen() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Debounced alias filter: typing fires one query 300ms after the last
+  // keystroke instead of one per keystroke (audit P2 fix).
+  const [deferredFilter, setDeferredFilter] = useState("");
+  // Sequence guard: a slow response for an older filter must never overwrite
+  // the result of a newer one.
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDeferredFilter(aliasFilter), 300);
+    return () => window.clearTimeout(t);
+  }, [aliasFilter]);
 
   const refresh = useCallback(async () => {
     setError(null);
-    const rows = await invokeOr<RecordRow[]>("list_request_records", {
-      limit: 200,
-      aliasFilter: aliasFilter || null,
-      errorsOnly,
-    });
-    if (rows) setRecords(rows);
-    else setError("Request history unavailable.");
-  }, [aliasFilter, errorsOnly]);
+    const seq = ++seqRef.current;
+    try {
+      const rows = await invokeOr<RecordRow[]>("list_request_records", {
+        limit: 200,
+        aliasFilter: deferredFilter || null,
+        errorsOnly,
+      });
+      if (seq !== seqRef.current) return; // a newer query superseded this one
+      if (rows) setRecords(rows);
+      else setError("Request history unavailable.");
+    } catch (err) {
+      if (seq !== seqRef.current) return;
+      setError(String(err));
+    }
+  }, [deferredFilter, errorsOnly]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const copyCorrelation = async (id: string) => {
-    await navigator.clipboard.writeText(id);
-    setCopied(id);
-    window.setTimeout(() => setCopied(null), 1500);
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(id);
+      window.setTimeout(() => setCopied(null), 1500);
+    } catch (err) {
+      setError(`clipboard unavailable: ${String(err)}`);
+    }
   };
 
   return (

@@ -17,14 +17,41 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
+use zeroize::Zeroizing;
 
 use crate::GatewayError;
+
+/// RAII guard for the in-flight counter (audit P2 fix): the decrement runs in
+/// `Drop`, so the counter can no longer drift upward when the service future
+/// is dropped early (client disconnect) or unwinds through a panic — either
+/// of which previously skipped the manual `fetch_sub` and permanently stalled
+/// the drain wait.
+struct InFlightGuard {
+    counter: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl InFlightGuard {
+    fn new(counter: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            counter: Arc::clone(counter),
+        }
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 /// Runtime configuration for one gateway instance.
 #[derive(Clone)]
 pub struct GatewayConfig {
     /// The expected gateway token (from the OS vault). Must be non-empty.
-    pub token: Arc<Vec<u8>>,
+    /// Zeroize-on-drop (audit P3 hardening).
+    pub token: Arc<Zeroizing<Vec<u8>>>,
     /// Loopback port (FR-005).
     pub port: u16,
     /// Request body size budget in bytes (default 32 MiB).
@@ -46,7 +73,7 @@ pub struct GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            token: Arc::new(Vec::new()),
+            token: Arc::new(Zeroizing::new(Vec::new())),
             port: 8787,
             body_limit_bytes: 32 * 1024 * 1024,
             concurrency: 16,
@@ -63,8 +90,8 @@ impl Default for GatewayConfig {
 pub struct GatewayHandle {
     addr: std::net::SocketAddr,
     task: JoinHandle<()>,
-    shutdown: watch::Sender<bool>,
-    token: Arc<tokio::sync::RwLock<Arc<Vec<u8>>>>,
+    shutdown: watch::Sender<Option<u64>>,
+    token: Arc<tokio::sync::RwLock<Arc<Zeroizing<Vec<u8>>>>>,
 }
 
 impl GatewayHandle {
@@ -100,7 +127,9 @@ impl GatewayHandle {
             permits: Arc::new(tokio::sync::Semaphore::new(config.concurrency)),
         };
         let app = crate::router_with_state(&config, state);
-        let (shutdown, shutdown_rx) = watch::channel(false);
+        // The shutdown signal carries the caller's drain grace (seconds) so
+        // the in-flight wait window matches `stop(grace)` exactly.
+        let (shutdown, shutdown_rx) = watch::channel(None::<u64>);
         let header_timeout = Duration::from_millis(config.header_timeout_ms.max(1));
         let task = tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
@@ -109,7 +138,7 @@ impl GatewayHandle {
             let mut accept_failed = false;
             loop {
                 tokio::select! {
-                    _ = shutdown_rx.wait_for(|stop| *stop) => break,
+                    _ = shutdown_rx.wait_for(|stop| stop.is_some()) => break,
                     accepted = listener.accept() => match accepted {
                         Ok((stream, _peer)) => {
                             let app = app.clone();
@@ -126,16 +155,13 @@ impl GatewayHandle {
                                             // tower stack — the timeout layer can hold
                                             // the middleware future beyond the response,
                                             // which would break a middleware-level counter.
-                                            in_flight
-                                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                            let response = app
-                                                .oneshot(req.map(axum::body::Body::new))
-                                                .await;
-                                            in_flight.fetch_sub(
-                                                1,
-                                                std::sync::atomic::Ordering::SeqCst,
-                                            );
-                                            response
+                                            // RAII guard (audit P2 fix): the decrement
+                                            // runs even when the service future is
+                                            // dropped early (client disconnect) or
+                                            // unwinds, so the counter can no longer
+                                            // drift upward and stall the drain.
+                                            let _guard = InFlightGuard::new(&in_flight);
+                                            app.oneshot(req.map(axum::body::Body::new)).await
                                         }
                                     },
                                 );
@@ -164,17 +190,17 @@ impl GatewayHandle {
             // Drain (FR-017): wait for in-flight requests to complete (the
             // runtime in-flight counter tracks handlers, not idle keep-alive
             // connections), then close the remaining idle connections. The
-            // outer stop(grace) bounds total shutdown time.
+            // inner drain window is the caller's `stop(grace)` — a hardcoded
+            // 30 s previously force-aborted legitimate long streaming
+            // requests when the caller granted more grace, and was dead code
+            // when the caller granted less (audit P2 fix).
+            let grace = Duration::from_secs(shutdown_rx.borrow().unwrap_or(5));
             drop(listener);
-            eprintln!(
-                "DEBUG drain start in_flight={}",
-                in_flight.load(std::sync::atomic::Ordering::SeqCst)
+            tracing::debug!(
+                in_flight = in_flight.load(std::sync::atomic::Ordering::SeqCst),
+                "drain start"
             );
-            let _ = tokio::time::timeout(
-                Duration::from_secs(30),
-                crate::wait_for_in_flight_idle(&in_flight),
-            )
-            .await;
+            let _ = tokio::time::timeout(grace, crate::wait_for_in_flight_idle(&in_flight)).await;
             connections.abort_all();
             let _ = connections.join_all().await;
             if accept_failed {
@@ -196,7 +222,7 @@ impl GatewayHandle {
 
     /// Hot-swaps the expected token without a restart (SEC2-02): the old
     /// token is revoked immediately for all subsequent requests.
-    pub async fn update_token(&self, token: Vec<u8>) {
+    pub async fn update_token(&self, token: Zeroizing<Vec<u8>>) {
         assert!(!token.is_empty(), "token must be non-empty (SEC2-07)");
         *self.token.write().await = Arc::new(token);
     }
@@ -208,7 +234,7 @@ impl GatewayHandle {
     /// [`GatewayError::DrainTimedOut`] when the grace period elapses; the
     /// task is aborted in that case (bounded termination).
     pub async fn stop(self, grace: Duration) -> Result<(), GatewayError> {
-        let _ = self.shutdown.send(true);
+        let _ = self.shutdown.send(Some(grace.as_secs().max(1)));
         let mut task = self.task;
         match tokio::time::timeout(grace, &mut task).await {
             Ok(Ok(())) | Ok(Err(_)) => Ok(()),
@@ -224,12 +250,15 @@ impl GatewayHandle {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
+    use zeroize::Zeroizing;
 
     use super::{GatewayConfig, GatewayError, GatewayHandle};
 
     fn config(port: u16, timeout_ms: u64, concurrency: usize, body_limit: usize) -> GatewayConfig {
         GatewayConfig {
-            token: Arc::new(b"0123456789abcdefghijklmnopqrstuvwxyz0".to_vec()),
+            token: Arc::new(Zeroizing::new(
+                b"0123456789abcdefghijklmnopqrstuvwxyz0".to_vec(),
+            )),
             port,
             body_limit_bytes: body_limit,
             concurrency,
@@ -426,7 +455,9 @@ mod tests {
         assert_eq!(ok.status(), reqwest::StatusCode::OK);
 
         handle
-            .update_token(b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_vec())
+            .update_token(Zeroizing::new(
+                b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_vec(),
+            ))
             .await;
 
         let old_token = client()
@@ -450,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn empty_token_is_rejected_fail_closed() {
         let error = GatewayHandle::start(GatewayConfig {
-            token: Arc::new(Vec::new()),
+            token: Arc::new(Zeroizing::new(Vec::new())),
             ..GatewayConfig::default()
         })
         .await

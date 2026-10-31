@@ -32,6 +32,14 @@ const SENSITIVE_FIELDS: &[&str] = &[
     "api_key",
     "password",
     "credential",
+    // Near-miss forms the exact-match list previously let through (audit P3
+    // hardening; still exact-match — free-text is documented as unredactable).
+    "secret_b64",
+    "refresh_token",
+    "access_token",
+    "bearer",
+    "passphrase",
+    "client_secret",
 ];
 
 const LOG_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
@@ -344,7 +352,7 @@ mod tests {
                 let state = AppState::new(db, Arc::new(InMemorySecretStore::new()));
 
                 let token = state.ensure_token().await.unwrap();
-                let token_str = String::from_utf8(token.clone()).unwrap();
+                let token_str = String::from_utf8(token.to_vec()).unwrap();
                 assert_eq!(token.len(), 43);
                 // Reveal path exercises the same code path as the IPC command.
                 let revealed = state.reveal_token().await.unwrap();

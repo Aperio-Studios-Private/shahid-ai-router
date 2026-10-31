@@ -20,18 +20,36 @@ mod phase11_tests {
     }
 
     /// Answers one POST with a valid SSE stream in `chunk_delay` chunks,
-    /// then closes (mid-stream drop after `chunks`).
-    fn spawn_sse_server(listener: TcpListener, chunk_delay: Duration, chunks: usize) {
+    /// then closes (mid-stream drop after `chunks`). `hits` counts accepted
+    /// connections so the test can prove NO retry happened.
+    fn spawn_sse_server(
+        listener: TcpListener,
+        chunk_delay: Duration,
+        chunks: usize,
+        hits: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::Ordering;
         tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     break;
                 };
+                hits.fetch_add(1, Ordering::SeqCst);
                 tokio::spawn(async move {
+                    // Read the FULL request (head + JSON body) before
+                    // responding, like the stalled-stream scenario.
+                    let mut received = Vec::new();
                     let mut buf = [0u8; 4096];
-                    // Read the request head (best effort).
-                    let _ =
-                        tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
+                    loop {
+                        let n = stream.read(&mut buf).await.unwrap_or(0);
+                        received.extend_from_slice(&buf[..n]);
+                        if n == 0
+                            || (String::from_utf8_lossy(&received).contains("\r\n\r\n")
+                                && received.ends_with(b"}"))
+                        {
+                            break;
+                        }
+                    }
                     let body = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
                     let _ = stream.write_all(body.as_bytes()).await;
                     for i in 0..chunks {
@@ -48,80 +66,121 @@ mod phase11_tests {
         });
     }
 
-    async fn start_gateway(db: sair_persistence::Db, header_timeout_ms: u64) -> GatewayHandle {
-        let vault = Arc::new(InMemorySecretStore::new());
-        let secret_ref = vault.store(b"sk-upstream".to_vec().as_slice()).unwrap();
-        let alias_id = db.repos().insert_alias("test-model", None).await.unwrap();
-        let _ = secret_ref;
-        // Two credentials with DISTINCT secret refs (review F-11-3).
-        for (i, provider_name) in ["P0", "P1"].iter().enumerate() {
-            let secret_ref_i = vault
-                .store(format!("sk-{i}").into_bytes().as_slice())
-                .unwrap();
-            let provider_id = db
-                .repos()
-                .insert_provider(
-                    provider_name,
-                    "openai_compatible",
-                    "http://127.0.0.1:1", // placeholder; not contacted by these tests
-                    true,
-                    None,
-                )
-                .await
-                .unwrap();
-            db.repos()
-                .insert_credential(&provider_id, "key", secret_ref_i.as_str(), 0, 1)
-                .await
-                .unwrap();
-            let model_pk = db
-                .repos()
-                .insert_model(&provider_id, "model-0", "openai_chat", &json!({}), None)
-                .await
-                .unwrap();
-            let deployment_id = db
-                .repos()
-                .insert_deployment(&provider_id, &model_pk, None)
-                .await
-                .unwrap();
-            db.repos()
-                .bind_deployment(&alias_id, &deployment_id, 10 - i as i64)
-                .await
-                .unwrap();
-        }
-        let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
-        let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
-            port: 0,
-            header_timeout_ms,
-            api: Some(api),
-            ..GatewayConfig::default()
-        };
-        GatewayHandle::start(config).await.unwrap()
-    }
-
     use crate::api::ApiDeps;
+    use zeroize::Zeroizing;
 
     /// Scenario 1 (Phase 7 F-4): mid-stream upstream drop. The client
     /// receives the partial frames and the connection closes; the gateway
-    /// MUST NOT retry (no second upstream hit after commitment).
+    /// MUST NOT retry (no second upstream hit after commitment), and the
+    /// credential must stay active/cooling-free. This replaces the vacuous
+    /// stub found by the audit (zero assertions, no request sent) — audit
+    /// P1 fix.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn mid_stream_drop_relays_partial_and_does_not_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let upstream = raw_upstream().await;
         let upstream_addr = upstream.local_addr().unwrap();
-        spawn_sse_server(upstream, Duration::from_millis(100), 2);
+        let hits = Arc::new(AtomicUsize::new(0));
+        spawn_sse_server(upstream, Duration::from_millis(30), 2, Arc::clone(&hits));
 
         let _ = rustls::crypto::ring::default_provider().install_default();
         let db = sair_persistence::Db::open("sqlite::memory:").await.unwrap();
         db.run_migrations().await.unwrap();
-        // Point both providers at the raw mock's fixed port.
-        // (setup uses its own DB here to keep the raw server authoritative.)
-        let handle = start_gateway(db, 5_000).await;
-        let _ = upstream_addr; // upstream referenced via provider rows in a full run
+        let vault = Arc::new(InMemorySecretStore::new());
+        let secret_ref = vault.store(b"sk".to_vec().as_slice()).unwrap();
+        let provider_id = db
+            .repos()
+            .insert_provider(
+                "P0",
+                "openai_compatible",
+                &format!("http://{upstream_addr}"),
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+        db.repos()
+            .insert_credential(&provider_id, "key", secret_ref.as_str(), 0, 1)
+            .await
+            .unwrap();
+        let model_pk = db
+            .repos()
+            .insert_model(&provider_id, "model-0", "openai_chat", &json!({}), None)
+            .await
+            .unwrap();
+        let deployment_id = db
+            .repos()
+            .insert_deployment(&provider_id, &model_pk, None)
+            .await
+            .unwrap();
+        let alias_id = db.repos().insert_alias("test-model", None).await.unwrap();
+        db.repos()
+            .bind_deployment(&alias_id, &deployment_id, 10)
+            .await
+            .unwrap();
+        let api = Arc::new(ApiDeps::new(
+            db.clone(),
+            vault,
+            4,
+            Default::default(),
+            300_000,
+        ));
+        let config = GatewayConfig {
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
+            port: 0,
+            api: Some(api),
+            ..GatewayConfig::default()
+        };
+        let handle = GatewayHandle::start(config).await.unwrap();
 
-        // The gateway relays whatever arrives; with the upstream dropping
-        // after 2 chunks, the client sees a partial body and EOF — and the
-        // credential cooldown/quarantine state MUST NOT change (no retry).
-        let _ = handle;
+        // Raw client (like the stalled-stream scenario): deterministic EOF
+        // handling when the relay drops mid-stream.
+        let mut conn = tokio::net::TcpStream::connect(handle.addr()).await.unwrap();
+        let req_body = json!({"model": "test-model", "stream": true, "messages": []}).to_string();
+        conn.write_all(
+            format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {TOKEN}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{req_body}",
+                handle.addr(),
+                req_body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), conn.read_to_end(&mut buf)).await;
+        assert!(read.is_ok(), "relay did not close within 5s");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("200 OK") && text.contains("text/event-stream"),
+            "expected committed SSE response, got: {text}"
+        );
+        // The chunked SSE frames are chunk-ENCODED on the wire; the relayed
+        // partial payload must contain the upstream's frames (hex sizes +
+        // `data:` payloads) before the drop.
+        assert!(
+            text.contains("data:") && text.contains("{\"i\":0}"),
+            "expected at least the first upstream frame relayed, got: {text}"
+        );
+
+        // Give any (forbidden) retry a window to fire, then assert the
+        // commit boundary: exactly ONE upstream hit.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "upstream must be contacted exactly once (no retry after stream commitment)"
+        );
+
+        // The credential must be untouched: still active, not cooling, not
+        // quarantined (a retry loop would have cooled/quarantined it).
+        let credentials = db.repos().list_credentials(&provider_id).await.unwrap();
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].status, "active");
+        assert!(credentials[0].cooldown_until.is_none());
+
+        handle.stop(Duration::from_secs(2)).await.unwrap();
     }
 
     /// Scenario 2 (Phase 7 F-1 / review F-11-3): a stalled stream (no bytes
@@ -192,7 +251,7 @@ mod phase11_tests {
             .unwrap();
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 700));
         let mut config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()
@@ -305,7 +364,7 @@ mod phase11_tests {
             .unwrap();
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()
@@ -431,7 +490,7 @@ mod phase11_tests {
             .unwrap();
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()

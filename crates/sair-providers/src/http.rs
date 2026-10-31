@@ -30,6 +30,56 @@ pub enum SsrfError {
     Resolution(String),
 }
 
+/// Reads a response body incrementally with a hard byte cap. The previous
+/// `bytes().await` + post-hoc length check buffered the whole body BEFORE
+/// consulting the cap, so a hostile upstream could exhaust memory (audit P1
+/// fix). Chunked reads stop as soon as the cap is exceeded.
+///
+/// # Errors
+/// [`BodyLimitError::TooLarge`] when the cap is exceeded;
+/// [`BodyLimitError::Transport`] on network failures (classify as usual).
+pub async fn read_body_bounded(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BodyLimitError> {
+    let mut out = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(BodyLimitError::Transport)? {
+        if out.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(BodyLimitError::TooLarge { limit: max_bytes });
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+/// Failure modes of [`read_body_bounded`].
+#[derive(Debug, Error)]
+pub enum BodyLimitError {
+    #[error("upstream body exceeded {limit} bytes")]
+    TooLarge { limit: usize },
+    #[error(transparent)]
+    Transport(#[from] reqwest::Error),
+}
+
+/// Parses the standard `Retry-After` header value: seconds form or HTTP-date
+/// (RFC 7231 IMF-fixdate, previously ignored — audit P2 fix). Result is
+/// capped at `max_secs` so a hostile provider cannot freeze credentials
+/// long-term.
+#[must_use]
+pub fn parse_retry_after(value: &str, max_secs: u64) -> Option<u64> {
+    let v = value.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(secs.min(max_secs));
+    }
+    // "Sun, 06 Nov 1994 08:49:37 GMT" — parse the fixed IMF-fixdate shape
+    // (the trailing " GMT" is implied by the fixed format).
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(v, "%a, %d %b %Y %H:%M:%S") {
+        let delta = dt.and_utc().timestamp() - chrono::Utc::now().timestamp();
+        return Some((delta.max(0) as u64).min(max_secs));
+    }
+    None
+}
+
 /// SSRF policy applied to every outbound provider connection.
 #[derive(Debug, Clone, Default)]
 pub struct SsrfPolicy {
@@ -164,10 +214,12 @@ impl AddressSource for SystemResolver {
 }
 
 /// Validating resolver handed to reqwest: resolution + validation together
-/// (ADR-015). Literal IPs never hit the inner resolver.
+/// (ADR-015). Literal IPs never hit the inner resolver. Cheaply cloneable so
+/// the Resolve future can own a handle for `spawn_blocking`.
+#[derive(Clone)]
 pub struct ValidatingResolver {
     policy: SsrfPolicy,
-    source: Box<dyn AddressSource>,
+    source: Arc<dyn AddressSource>,
 }
 
 impl ValidatingResolver {
@@ -175,12 +227,12 @@ impl ValidatingResolver {
     pub fn new(policy: SsrfPolicy) -> Self {
         Self {
             policy,
-            source: Box::new(SystemResolver),
+            source: Arc::new(SystemResolver),
         }
     }
 
     #[must_use]
-    pub fn with_source(policy: SsrfPolicy, source: Box<dyn AddressSource>) -> Self {
+    pub fn with_source(policy: SsrfPolicy, source: Arc<dyn AddressSource>) -> Self {
         Self { policy, source }
     }
 
@@ -197,13 +249,23 @@ impl ValidatingResolver {
             }
             return Err(SsrfError::AddressBlocked(ip));
         }
+        let is_localhost_name = host.eq_ignore_ascii_case("localhost");
         let addrs = self
             .source
             .resolve(host, port)
             .map_err(|e| SsrfError::Resolution(e.to_string()))?;
         let allowed: Vec<SocketAddr> = addrs
             .into_iter()
-            .filter(|addr| self.policy.is_allowed(addr.ip()))
+            .filter(|addr| {
+                if is_localhost_name {
+                    // Cleartext HTTP is allowed for `localhost` by name only
+                    // because of the loopback exception; a public address for
+                    // that name must not inherit the exception (audit P2 fix).
+                    addr.ip().is_loopback() && self.policy.is_allowed(addr.ip())
+                } else {
+                    self.policy.is_allowed(addr.ip())
+                }
+            })
             .collect();
         if allowed.is_empty() {
             return Err(SsrfError::AddressBlocked(
@@ -222,12 +284,23 @@ impl reqwest::dns::Resolve for ValidatingResolver {
         // reqwest invokes custom resolvers with the hostname only; the port
         // comes from the request URL (doc: explicit URL port overrides the
         // resolved SocketAddr port), so 0 is a placeholder here.
+        //
+        // getaddrinfo is blocking; keep it off the tokio worker threads via
+        // spawn_blocking (audit P2 fix — the previous ready-future ran the
+        // blocking call inline on the polling task).
         let host = name.as_str().to_string();
-        let result = self
-            .validate_host(&host, 0)
-            .map(|addrs| Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
-        Box::pin(std::future::ready(result))
+        let resolver = self.clone();
+        Box::pin(async move {
+            let result = tokio::task::spawn_blocking(move || resolver.validate_host(&host, 0))
+                .await
+                .map_err(|e| {
+                    Box::new(io::Error::other(e.to_string()))
+                        as Box<dyn std::error::Error + Send + Sync>
+                })?;
+            result
+                .map(|addrs| Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        })
     }
 }
 
@@ -369,6 +442,7 @@ pub fn build_streaming_client_with_idle_timeout(
 mod tests {
     use super::{AddressSource, SsrfError, SsrfPolicy, ValidatingResolver, build_client};
     use std::net::{IpAddr, SocketAddr};
+    use std::sync::Arc;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -500,13 +574,13 @@ mod tests {
             SocketAddr::new(ip("10.0.0.1"), 443),
         ];
         let resolver =
-            ValidatingResolver::with_source(SsrfPolicy::default(), Box::new(Mock(mixed)));
+            ValidatingResolver::with_source(SsrfPolicy::default(), Arc::new(Mock(mixed)));
         let out = resolver.validate_host("rebinding.example", 443).unwrap();
         assert_eq!(out, vec![SocketAddr::new(ip("8.8.8.8"), 443)]);
 
         let all_private = vec![SocketAddr::new(ip("10.0.0.1"), 443)];
         let resolver =
-            ValidatingResolver::with_source(SsrfPolicy::default(), Box::new(Mock(all_private)));
+            ValidatingResolver::with_source(SsrfPolicy::default(), Arc::new(Mock(all_private)));
         assert!(matches!(
             resolver.validate_host("private.example", 443),
             Err(SsrfError::AddressBlocked(_))

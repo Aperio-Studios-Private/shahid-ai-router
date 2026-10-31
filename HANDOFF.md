@@ -34,16 +34,19 @@ The `.agent/` directory contains the binding workflow. An agent continuing this 
 6. Update per change: `docs/TRACEABILITY_MATRIX.md`, `tasks/BACKLOG.md`, `tasks/IN_PROGRESS.md`, `CHANGELOG.md`; commit + push after each gate.
 7. Statuses are PASS / FAIL / BLOCKED. Unimplemented requirements stay visibly incomplete (docs/01 acceptance rule).
 
-## 3. Current state (post-Phase 11)
+## 3. Current state (post-Phase 11 + audit fixes)
 
-All **11 roadmap phases are COMPLETE** with gate evidence in `reports/phase-reports/phase-0..11.md`.
+All **11 roadmap phases are COMPLETE** with gate evidence in `reports/phase-reports/phase-1..11.md`
+(Phase 0 evidence: `audits/planning/planning-audit.md`). An independent full-repository audit
+(2026-10-31) then found and FIXED UI/backup/CI defects the gates had missed — see
+`reports/phase-reports/audit-fixes.md` and `tasks/COMPLETED.md` (AF-01..AF-13).
 Release claim: **"code-complete with residuals"** — no release tag until the owner waives the BLOCKED items (below).
 
-- **Tests**: 139 Rust (`cargo test --workspace`) + 2 vitest — all green at head.
-- **Gates**: clippy `-D warnings` clean, `cargo fmt --check` clean, tsc clean, production build ok.
-- **Release build**: `target/release/shahid-ai-router.exe` (20.4 MB), SHA-256 archived in `docs/sbom/release-checksum-sha256.txt`; CycloneDX SBOMs per crate in `docs/sbom/`.
+- **Tests**: 142 Rust (`cargo test --workspace`) + 2 vitest — all green (verified locally on macOS 2026-10-31).
+- **Gates**: clippy `-D warnings` clean, `cargo fmt --check` clean, tsc clean, production build ok (re-verified on macOS).
+- **Release build**: `target/release/shahid-ai-router.exe` (20.4 MB), SHA-256 archived in `docs/sbom/release-checksum-sha256.txt`; CycloneDX SBOMs per crate in `docs/sbom/` (note: SBOMs embed the generating machine's Windows path — regenerate before release).
 - **Live smoke**: gateway autostart on 127.0.0.1:8787, 401/403 enforcement, graceful drain, clean exit — verified on the release binary.
-- Traceability: 24 FR rows at Implemented; residuals explicitly listed in §6.
+- Traceability: 23 FR rows (FR-001..FR-023) at Implemented; residuals explicitly listed in §6.
 
 ## 4. Repository layout
 
@@ -103,14 +106,17 @@ OS per-user app-data dir; gateway autostarts on `127.0.0.1:8787`; logs under app
 
 | Item | Who | Detail |
 |---|---|---|
-| **CI execution** | OWNER (blocking) | GitHub Actions fails at startup: *"recent account payments have failed or your spending limit needs to be increased"* (org billing). Fix Billing & plans → the ready-made matrix runs fmt/clippy/tests + frontend on Windows+macOS. |
-| **macOS verification** | OWNER | Vault (Keychain), encrypted-backup restore, full app run. CI job ready; algorithm is pure Rust. |
+| **CI execution** | OWNER (blocking) | GitHub Actions fails at startup: *"recent account payments have failed or your spending limit needs to be increased"* (org billing). Fix Billing & plans → the pipeline runs fmt/clippy/tests + frontend + the Phase-11 security audit job (cargo-audit/npm audit) on push. |
+| **macOS verification** | OWNER | Vault (Keychain), encrypted-backup restore, full app run. CI job ready; the workspace now also compiles on macOS (audit fix AF-13: RGBA icons + icns) and 142 tests pass there. |
 | **Signing/notarization** | OWNER | Owner certificates required. |
 | **Clean-machine install check** | OWNER | Fresh VM/second user — env overrides CANNOT isolate the Windows data dir (uses SHGetKnownFolderPath). |
-| Mid-stream-drop full assertion | Agent | Fixture needs two-provider wiring (skeleton in `api_phase11_tests.rs`). |
 | Streamed token counts (FR-011 residual) | Agent | SSE frame parsing, post-v1. |
 | Live CLI/provider verification | OWNER | Opt-in live tests need real credentials. |
 | `/v1/responses` surface (Codex CLI) | Agent, post-v1 | Codex removed `wire_api="chat"` — ADR-010 amended; without it Codex is unsupported. |
+
+Closed by the 2026-10-31 audit fixes: mid-stream-drop full assertion (now a real raw-TCP test asserting
+one upstream hit + partial relay + untouched credential); backup-restore correctness cluster (config-mode
+commit, deployment natural-key restore, alias bindings, settings/profiles staging, real conflict report).
 
 ## 7. Gotchas (learned the hard way — read before coding)
 

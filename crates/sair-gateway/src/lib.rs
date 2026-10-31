@@ -2,13 +2,14 @@
 //! review findings F-1/F-2).
 //!
 //! Middleware stack, outermost first (request order):
-//! 1. Concurrency guard — immediate 503 at capacity (no unbounded queueing).
+//! 1. Body size limit — 413 over budget.
 //! 2. Timeout budget (tower-http) — 408 when the budget elapses.
 //! 3. Host allowlist — exact `127.0.0.1[:port]` / `localhost[:port]` only.
 //! 4. Token auth — `Authorization: Bearer`, `x-api-key` or `x-goog-api-key`;
 //!    constant-time comparison. `/healthz` sits behind auth too: the
 //!    invariant is that no unauthenticated route exists (including 404s).
-//! 5. Body size limit — 413 over budget.
+//! 5. Concurrency guard — immediate 503 at capacity (no unbounded queueing);
+//!    innermost so unauthenticated requests never consume a permit.
 //!
 //! No CORS headers are emitted. The gateway binds `127.0.0.1` only.
 
@@ -38,6 +39,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde_json::json;
 use tower_http::timeout::TimeoutLayer;
+use zeroize::Zeroizing;
 
 /// Waits until the live handler count reaches zero (drain semantics,
 /// FR-017: idle keep-alive connections close at drain; only handlers are
@@ -78,7 +80,7 @@ pub enum GatewayError {
 /// token immediately).
 #[derive(Clone)]
 pub struct GatewayRuntimeState {
-    expected_token: Arc<tokio::sync::RwLock<Arc<Vec<u8>>>>,
+    expected_token: Arc<tokio::sync::RwLock<Arc<Zeroizing<Vec<u8>>>>>,
     permits: Arc<tokio::sync::Semaphore>,
 }
 
@@ -121,6 +123,16 @@ pub(crate) fn router_with_state(config: &GatewayConfig, state: GatewayRuntimeSta
             )
     };
     router
+        // Concurrency guard is the innermost layer (added first): the permit
+        // is acquired only AFTER token auth and the Host check pass, so
+        // unauthenticated local requests can no longer consume the 16 slots
+        // and starve legitimate clients (audit P2 fix). Request order:
+        // body-limit → timeout → host allowlist → token auth → concurrency
+        // → route.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            concurrency_guard,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             token_auth,
@@ -129,10 +141,6 @@ pub(crate) fn router_with_state(config: &GatewayConfig, state: GatewayRuntimeSta
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_millis(config.timeout_ms),
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            concurrency_guard,
         ))
         .layer(axum::extract::DefaultBodyLimit::max(
             config.body_limit_bytes,
@@ -219,7 +227,7 @@ async fn token_auth(
 ) -> Response {
     let provided = extract_token(&headers);
     let expected = state.expected_token.read().await.clone();
-    if token::verify_token(provided, &expected) {
+    if token::verify_token(provided, expected.as_slice()) {
         // Phase 11: in-flight counting lives in handle.rs's service_fn — the
         // timeout layer can hold this middleware future beyond the response,
         // which would leak a middleware-level counter (found via the paired
@@ -262,10 +270,13 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+    use zeroize::Zeroizing;
 
     fn test_config() -> GatewayConfig {
         GatewayConfig {
-            token: std::sync::Arc::new(b"0123456789abcdefghijklmnopqrstuvwxyz0".to_vec()),
+            token: std::sync::Arc::new(Zeroizing::new(
+                b"0123456789abcdefghijklmnopqrstuvwxyz0".to_vec(),
+            )),
             ..GatewayConfig::default()
         }
     }

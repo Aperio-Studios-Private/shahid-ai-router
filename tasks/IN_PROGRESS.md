@@ -1,17 +1,11 @@
 # In Progress
 
-- Phase 0 (Discovery) — COMPLETE. Phase 1 (Skeleton) — COMPLETE, gate PASS.
-- **Phase 2 (Security & persistence) — COMPLETE, gate PASS** (reports/phase-reports/phase-2.md).
-  - Independent security review: PASS WITH FINDINGS → all High/Medium findings fixed and re-verified FIXED (audits/security/phase2-security-review.md); remaining items Low, non-blocking, tracked in the review file.
-  - Dependency audit: 0 vulnerabilities (audits/security/phase2-dependency-audit.md).
-  - Open blocker: B-01 (GitHub Actions billing — owner action required; see tasks/BLOCKED.md). macOS evidence pending CI repair or the owner's interactive verification (ADR-016).
-- **Phase 3 (first vertical slice) — COMPLETE, gate PASS** (reports/phase-reports/phase-3.md): OpenAI-compatible surface, routing engine (ADR-017/018), management UI, 88 tests green.
-- **Phase 4 (rotation & health) — COMPLETE, gate PASS** (reports/phase-reports/phase-4.md): account grouping (quota truth), per-deployment concurrency (FR-021), health-event persistence fix (R4-01), deterministic failure suite. 93 tests green.
-- **Phase 5 (OpenRouter + capability matrix) — COMPLETE, gate PASS** (reports/phase-reports/phase-5.md). 100 tests green.
-- **Phase 6 (native Anthropic + Gemini surfaces) — COMPLETE, gate PASS** (reports/phase-reports/phase-6.md). 118 tests green.
-- **Phase 7 (streaming) — COMPLETE, gate PASS** (reports/phase-reports/phase-7.md). 123 tests green.
-- **Phase 8 (agent profiles) — COMPLETE, gate PASS** (reports/phase-reports/phase-8.md). Codex documented-unsupported (upstream removed chat wire API). 132 tests green.
-- **Phase 9 (UI completion) — COMPLETE, gate PASS** (reports/phase-reports/phase-9.md). Logs/Usage/Health screens, no-route recording, secret-safe projection. 132 tests green.
-- **Phase 10 (backup/restore) — COMPLETE, gate PASS** (reports/phase-reports/phase-10.md). Encrypted + config modes, natural-key conflicts, vault re-store. 135 tests green.
-- **Phase 11 (hardening/release) — COMPLETE, gate PASS with residuals** (reports/phase-reports/phase-11.md). All 11 roadmap phases delivered. Release claim: code-complete with residuals (BLOCKED items need owner waiver per docs/11).
-- NEXT: owner actions (B-01 billing, macOS verification, signing) — all development phases are complete. — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).
+- Phase 0 (Discovery) — COMPLETE (evidence: audits/planning/planning-audit.md).
+- Phases 1–11 — ALL COMPLETE with gate PASS evidence in reports/phase-reports/phase-1..11.md.
+  Phase 11 closed as "code-complete with residuals" (BLOCKED items need owner waiver per docs/11).
+- **Post-audit fixes (2026-10-31) — COMPLETE, verified locally** (reports/phase-reports/audit-fixes.md,
+  tasks/COMPLETED.md AF-01..AF-13): 142 cargo tests + 2 vitest green, clippy `-D warnings` clean,
+  fmt clean, tsc + vite build clean on macOS.
+- NEXT: owner actions only (B-01 CI billing, macOS interactive verification, signing certs,
+  clean-VM install check) — all development work is complete pending those verifications.
+  Owner waiver of BLOCKED items then gates the v1.0.0 tag (docs/11).

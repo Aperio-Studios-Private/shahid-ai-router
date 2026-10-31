@@ -8,6 +8,7 @@ use base64::Engine;
 use ring::rand::SecureRandom;
 use sair_vault::{SecretRef, SecretStore, VaultError};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use crate::GatewayError;
 
@@ -50,7 +51,9 @@ pub struct TokenManager {
 
 pub struct TokenMaterial {
     pub secret_ref: SecretRef,
-    pub value: Vec<u8>,
+    /// The encoded token bytes (the exact form clients send). Zeroize-on-drop
+    /// (audit P3 hardening): every in-memory copy is wiped when dropped.
+    pub value: Zeroizing<Vec<u8>>,
 }
 
 impl TokenManager {
@@ -73,7 +76,7 @@ impl TokenManager {
             .map_err(|e| GatewayError::Token(e.to_string()))?;
         Ok(TokenMaterial {
             secret_ref,
-            value: encoded.into_bytes(),
+            value: Zeroizing::new(encoded.into_bytes()),
         })
     }
 
@@ -82,9 +85,10 @@ impl TokenManager {
     ///
     /// # Errors
     /// See [`GatewayError::Token`].
-    pub fn load(&self, secret_ref: &SecretRef) -> Result<Vec<u8>, GatewayError> {
+    pub fn load(&self, secret_ref: &SecretRef) -> Result<Zeroizing<Vec<u8>>, GatewayError> {
         self.store
             .retrieve(secret_ref)
+            .map(Zeroizing::new)
             .map_err(|e| GatewayError::Token(e.to_string()))
     }
 

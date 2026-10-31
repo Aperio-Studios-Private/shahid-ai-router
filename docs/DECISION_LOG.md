@@ -48,7 +48,7 @@ For each material decision record: ID/title, status, date, context, options, sou
 - Revisit trigger: need for a provider ring does not support.
 
 ## ADR-007: Encrypted backup crypto — Argon2id + AES-256-GCM (RustCrypto)
-- Status: Proposed (final parameters locked at Phase 10 after security review). Date: 2026-10-30.
+- Status: Accepted (parameters locked and implemented at Phase 10; report PASS 2026-10-31). Date: 2026-10-30.
 - Evidence: crates.io argon2 0.6.0; docs/10 requires vetted KDF + AEAD.
 - Decision: Argon2id (baseline m=64 MiB, t=3, p=1) deriving an AES-256-GCM key; versioned algorithm identifiers stored in the `.sair` manifest; lost passphrase = unrecoverable (explicit UI warning).
 - Revisit trigger: Phase 10 security review; RustCrypto advisories.

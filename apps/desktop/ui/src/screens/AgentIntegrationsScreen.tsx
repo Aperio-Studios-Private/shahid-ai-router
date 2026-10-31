@@ -29,6 +29,7 @@ export function AgentIntegrationsScreen() {
   const [alias, setAlias] = useState("");
   const [profile, setProfile] = useState<ProfileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const generate = useCallback(async () => {
@@ -52,10 +53,17 @@ export function AgentIntegrationsScreen() {
   const applyToFile = async (index: number) => {
     if (!profile) return;
     const file = profile.files[index];
-    const hash = await invokeOr<string>("hash_profile_target", {
-      agentId: profile.agent_id,
-      fileIndex: index,
-    });
+    setMessage(null);
+    let hash: string | null = null;
+    try {
+      hash = await invokeOr<string>("hash_profile_target", {
+        agentId: profile.agent_id,
+        fileIndex: index,
+      });
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
     const confirmed = window.confirm(
       `About to modify ${file}.\n\n` +
         "A backup (shahid-backup-<timestamp>) is written next to it first.\n" +
@@ -72,7 +80,9 @@ export function AgentIntegrationsScreen() {
         content: profile.config_text,
         expectedExisting: hash ?? "",
       });
-      setError(`Applied to ${applied}. Rollback: ${profile.rollback}`);
+      // Success is shown as a neutral confirmation, not the error banner
+      // (audit P3 fix: success was previously rendered via setError).
+      setMessage(`Applied to ${applied}. Rollback: ${profile.rollback}`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -124,6 +134,11 @@ export function AgentIntegrationsScreen() {
         </button>
       </div>
 
+      {message && (
+        <p role="status" className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
+          {message}
+        </p>
+      )}
       {error && (
         <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
           {error}
@@ -141,7 +156,11 @@ export function AgentIntegrationsScreen() {
           <button
             type="button"
             disabled={!profile.config_text}
-            onClick={() => void navigator.clipboard.writeText(profile.config_text)}
+            onClick={() => {
+              navigator.clipboard.writeText(profile.config_text).catch((err) => {
+                setError(`clipboard unavailable: ${String(err)}`);
+              });
+            }}
             className="mt-2 rounded-md border border-zinc-300 px-3 py-1.5 text-xs disabled:opacity-40 dark:border-zinc-700"
           >
             Copy config

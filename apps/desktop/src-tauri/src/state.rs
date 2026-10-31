@@ -13,6 +13,7 @@ use sair_persistence::Db;
 use sair_vault::{SecretRef, SecretStore};
 use serde::Serialize;
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
 
 /// Serializable view for the UI. Contains no secret material.
 #[derive(Debug, Clone, Serialize)]
@@ -62,11 +63,11 @@ impl AppState {
     /// # Errors
     /// Returns an error message when the vault or DB fails; the caller must
     /// not start the gateway without a token (review finding F-9).
-    pub async fn ensure_token(&self) -> Result<Vec<u8>, String> {
+    pub async fn ensure_token(&self) -> Result<Zeroizing<Vec<u8>>, String> {
         // In-memory cache.
         if let Some(secret_ref) = self.token_ref.read().await.clone() {
             match self.vault.retrieve(&secret_ref) {
-                Ok(value) => return Ok(value),
+                Ok(value) => return Ok(Zeroizing::new(value)),
                 Err(sair_vault::VaultError::NotFound) => {
                     tracing::warn!("vault item for gateway token vanished; recreating");
                 }
@@ -86,7 +87,7 @@ impl AppState {
             match self.vault.retrieve(&secret_ref) {
                 Ok(value) => {
                     *self.token_ref.write().await = Some(secret_ref);
-                    return Ok(value);
+                    return Ok(Zeroizing::new(value));
                 }
                 Err(sair_vault::VaultError::NotFound) => {
                     tracing::warn!("persisted gateway token ref not in vault; recreating");
@@ -141,7 +142,8 @@ impl AppState {
                 tracing::warn!(error = %e, "could not delete replaced gateway token item");
             }
         }
-        String::from_utf8(material.value).map_err(|_| "token bytes are not valid UTF-8".to_string())
+        String::from_utf8(material.value.to_vec())
+            .map_err(|_| "token bytes are not valid UTF-8".to_string())
     }
 
     /// The encoded token, for the explicit reveal action (UI masks by
@@ -151,7 +153,7 @@ impl AppState {
     /// Returns an error message when no token exists or the vault fails.
     pub async fn reveal_token(&self) -> Result<String, String> {
         let value = self.ensure_token().await?;
-        String::from_utf8(value).map_err(|_| "token bytes are not valid UTF-8".to_string())
+        String::from_utf8(value.to_vec()).map_err(|_| "token bytes are not valid UTF-8".to_string())
     }
 
     /// Starts the gateway. Bind failures and token failures are surfaced as
@@ -205,7 +207,7 @@ impl AppState {
         Ok(())
     }
 
-    async fn gateway_config(&self, token: Vec<u8>) -> Result<GatewayConfig, String> {
+    async fn gateway_config(&self, token: Zeroizing<Vec<u8>>) -> Result<GatewayConfig, String> {
         let settings = self
             .db
             .get_setting(SETTING_GATEWAY)
@@ -245,6 +247,7 @@ impl AppState {
             api: Some(api),
             ..GatewayConfig::default()
         };
+        // (token type is Zeroizing<Vec<u8>> — moved into the Arc directly.)
         if let Some(obj) = settings {
             if let Some(port) = obj.get("port").and_then(serde_json::Value::as_u64) {
                 if port == 0 || port > u16::MAX as u64 {

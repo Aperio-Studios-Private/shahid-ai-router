@@ -16,6 +16,23 @@ use serde_json::Value;
 use crate::http::SsrfCheckedClient;
 use crate::openai::{ChatOutcome, MAX_RESPONSE_BYTES, StreamStart, stream_request};
 
+/// Percent-encodes a model id for use as one URL path segment: `/`, `:`, `?`,
+/// `#`, `%` and control characters would otherwise reshape the upstream path
+/// or query (audit P3 hardening; ids come from local config, so this is
+/// defense-in-depth).
+fn encode_path_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'/' | b':' | b'?' | b'#' | b'%' | b' ' | 0x00..=0x1f | 0x7f..=0xff => {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+            _ => out.push(byte as char),
+        }
+    }
+    out
+}
+
 /// Sends one non-streaming `models/{model}:generateContent` request.
 ///
 /// # Errors
@@ -40,14 +57,17 @@ pub async fn generate_content(
         .to_string();
 
     let base = base_url.trim_end_matches('/');
-    let endpoint = url::Url::parse(&format!("{base}/v1beta/models/{model_id}:generateContent"))
-        .map_err(|e| UpstreamFailure {
-            category: ErrorCategory::InvalidRequest,
-            status: None,
-            code: None,
-            detail: format!("invalid upstream base URL: {e}"),
-            retry_after_secs: None,
-        })?;
+    let endpoint = url::Url::parse(&format!(
+        "{base}/v1beta/models/{}:generateContent",
+        encode_path_segment(model_id)
+    ))
+    .map_err(|e| UpstreamFailure {
+        category: ErrorCategory::InvalidRequest,
+        status: None,
+        code: None,
+        detail: format!("invalid upstream base URL: {e}"),
+        retry_after_secs: None,
+    })?;
 
     // F-2: streaming method rejected at the surface; generationConfig-level
     // streaming does not exist in generateContent.
@@ -79,17 +99,28 @@ pub async fn generate_content(
 
     let response = request.send().await.map_err(|e| classify_transport(&e))?;
     let status = response.status().as_u16();
+    // Standard HTTP Retry-After (seconds or HTTP-date) — Gemini previously
+    // never read the header, only the body's RetryInfo (audit P2 fix).
+    let header_retry_after: Option<u64> = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| crate::http::parse_retry_after(v, 3600));
 
-    let bytes = response.bytes().await.map_err(|e| classify_transport(&e))?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(UpstreamFailure {
-            category: ErrorCategory::TransportFailure,
-            status: Some(status),
-            code: Some("response_too_large".to_string()),
-            detail: format!("upstream body exceeded {MAX_RESPONSE_BYTES} bytes"),
-            retry_after_secs: None,
-        });
-    }
+    // Bounded INCREMENTAL read (audit P1 fix).
+    let bytes = match crate::http::read_body_bounded(response, MAX_RESPONSE_BYTES).await {
+        Ok(b) => b,
+        Err(crate::http::BodyLimitError::TooLarge { limit }) => {
+            return Err(UpstreamFailure {
+                category: ErrorCategory::TransportFailure,
+                status: Some(status),
+                code: Some("response_too_large".to_string()),
+                detail: format!("upstream body exceeded {limit} bytes"),
+                retry_after_secs: None,
+            });
+        }
+        Err(crate::http::BodyLimitError::Transport(e)) => return Err(classify_transport(&e)),
+    };
     let parsed: Value = serde_json::from_slice(&bytes).map_err(|e| UpstreamFailure {
         category: ErrorCategory::Unknown,
         status: Some(status),
@@ -111,7 +142,10 @@ pub async fn generate_content(
             body: parsed,
         })
     } else {
-        Err(classify(status, &parsed))
+        let mut failure = classify(status, &parsed);
+        failure.retry_after_secs = header_retry_after.or(failure.retry_after_secs);
+        failure.retry_after_secs = failure.retry_after_secs.map(|s| s.min(3600));
+        Err(failure)
     }
 }
 
@@ -149,7 +183,10 @@ pub fn classify(status: u16, body: &Value) -> UpstreamFailure {
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|d| d.to_string().to_lowercase()).collect())
         .unwrap_or_default();
-    // google.rpc RetryInfo.retryDelay ("5s") for cooldown (F-7).
+    // google.rpc RetryInfo.retryDelay ("5s", "1.5s") for cooldown (F-7).
+    // Fractional values round UP: cooling less than requested risks a
+    // premature retry into the same 429 (audit P3 fix — "1.5s" previously
+    // failed the u64 parse and was silently dropped).
     let retry_after_secs: Option<u64> = details
         .iter()
         .find(|d| d.contains("retryinfo"))
@@ -158,8 +195,13 @@ pub fn classify(status: u16, body: &Value) -> UpstreamFailure {
             // serialized key `"retrydelay":"` puts the value first.
             let rest = d.split("retrydelay\":\"").nth(1)?;
             let end = rest.find('"')?;
-            rest[..end].trim_end_matches('s').parse::<u64>().ok()
+            let raw = rest[..end].trim_end_matches('s');
+            if let Ok(secs) = raw.parse::<u64>() {
+                return Some(secs);
+            }
+            raw.parse::<f64>().ok().map(|f| f.ceil() as u64)
         })
+        .filter(|s| *s > 0)
         .map(|s| s.min(3600));
 
     let is_rate_limit_signal =
@@ -252,7 +294,8 @@ pub async fn generate_content_streaming(
         .to_string();
     let base = base_url.trim_end_matches('/');
     let endpoint = url::Url::parse(&format!(
-        "{base}/v1beta/models/{model_id}:streamGenerateContent?alt=sse"
+        "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",
+        encode_path_segment(model_id)
     ))
     .map_err(|e| UpstreamFailure {
         category: ErrorCategory::InvalidRequest,

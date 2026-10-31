@@ -2,7 +2,7 @@
 
 Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phase entry/exit follows `docs/13_ROADMAP.md` + planning audit §7. Tasks for future phases are decomposed at their phase gate (each phase entry requires its own plan + review per `.agent/WORKFLOW_RULES.md`).
 
-## Phase 1 — Skeleton (current)
+## Phase 1 — Skeleton (COMPLETE — see reports/phase-reports/phase-1.md)
 
 | ID | Task | Objective / acceptance | Files (owner: orchestrator) | Status |
 |---|---|---|---|---|
@@ -11,7 +11,7 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P1-T03 | Frontend scaffold | Vite + React 19 + TS + Tailwind 4; app shell with docs/08 navigation skeleton (Overview, Providers, API Keys, Models, Deployments, Routing, Agent Integrations, Gateway, Logs, Usage, Health, Backup, Settings, About); light/dark theme tokens; `tsc --noEmit` clean; vitest runs one smoke component test; production build passes | `apps/desktop/` (package.json, vite config, src/) | PASS (tsc clean; vitest 2/2; `vite build` ok — 2026-10-30) |
 | P1-T04 | Tauri shell | Tauri 2 app wrapping the frontend; minimal capabilities file; window config; one sample IPC command (`get_app_info`) proving Rust↔UI wiring; `tauri build` (debug) succeeds on Windows | `apps/desktop/src-tauri/` | PASS (tauri build --no-bundle --debug ok; exe smoke-tested: alive 7s, clean stop) |
 | P1-T05 | CI pipeline | GitHub Actions: matrix windows-latest + macos-latest; jobs = fmt+clippy, cargo test, frontend typecheck+vitest+build, tauri debug build; runs green on push | `.github/workflows/ci.yml` | PASS (file complete; cannot run until repo is hosted — same commands verified locally) |
-| P1-T06 | Phase 1 gate evidence | Full local build evidence (cargo build/test, npm build, tauri debug build, tool versions recorded); Phase 1 report in `reports/phase-reports/`; boards/traceability updated | `reports/phase-reports/phase-1.md` | IN_PROGRESS |
+| P1-T06 | Phase 1 gate evidence | Full local build evidence (cargo build/test, npm build, tauri debug build, tool versions recorded); Phase 1 report in `reports/phase-reports/`; boards/traceability updated | `reports/phase-reports/phase-1.md` | PASS |
 
 ## Phase 2 — Security & persistence (COMPLETE — see reports/phase-reports/phase-2.md)
 
@@ -35,8 +35,6 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P3-T05 | Management IPC commands (25) + Providers/Aliases UI | PASS |
 | P3-T06 | Gate: 88 tests, clippy clean, live smoke, report | PASS |
 
-## Phase 4 — Rotation & health (next; decompose at phase entry)
-
 ## Phase 4 — Rotation & health (COMPLETE — see reports/phase-reports/phase-4.md)
 
 | ID | Task | Status |
@@ -47,8 +45,6 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P4-T04 | Health-event mapping fix (R4-01) + read-back tests + summary commands | PASS |
 | P4-T05 | Retry-After header parse + caps (R4-04); credential dedupe (R4-02) | PASS |
 | P4-T06 | Deterministic simulated failure suite (5 scenarios) + gate | PASS |
-
-## Phase 5 — OpenRouter + aliases (next; decompose at phase entry)
 
 ## Phase 5 — OpenRouter + aliases (epic)
 

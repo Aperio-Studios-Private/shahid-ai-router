@@ -19,8 +19,13 @@ export function GatewayScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const view = await invokeOr<GatewayState>("get_gateway_state");
-    if (view) setState(view);
+    try {
+      const view = await invokeOr<GatewayState>("get_gateway_state");
+      if (view) setState(view);
+    } catch {
+      // Polling path: the action banner below already reports failures; an
+      // unreachable bridge in browser preview should not spam errors.
+    }
   }, []);
 
   useEffect(() => {
@@ -42,17 +47,20 @@ export function GatewayScreen() {
     }
   };
 
-  const start = () =>
-    run("Start", () => invokeOr("start_gateway", {}) ?? Promise.resolve());
+  const start = () => run("Start", () => invokeOr("start_gateway", {}));
 
-  const stop = () =>
-    run("Stop", () => invokeOr("stop_gateway", {}) ?? Promise.resolve());
+  const stop = () => run("Stop", () => invokeOr("stop_gateway", {}));
 
   const reveal = async () => {
-    const value = await invokeOr<string>("reveal_gateway_token", {});
-    if (value !== null) {
-      setToken(value);
-      setRevealed(true);
+    try {
+      const value = await invokeOr<string>("reveal_gateway_token", {});
+      if (value !== null) {
+        setToken(value);
+        setRevealed(true);
+      }
+    } catch (err) {
+      setAction("error");
+      setActionError(`Reveal failed: ${String(err)}`);
     }
   };
 
@@ -76,7 +84,12 @@ export function GatewayScreen() {
 
   const copy = async () => {
     if (token) {
-      await navigator.clipboard.writeText(token);
+      try {
+        await navigator.clipboard.writeText(token);
+      } catch (err) {
+        setAction("error");
+        setActionError(`Copy failed: ${String(err)}`);
+      }
     }
   };
 

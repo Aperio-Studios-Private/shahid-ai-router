@@ -158,8 +158,11 @@ fn openai_error(status: StatusCode, code: &str, message: &str, extra: Value) -> 
 /// protocol family, wire envelope, and upstream adapter.
 /// Phase 9 (F-1a): projects route exclusions into a decision-shaped JSON for
 /// no-route records (no candidates were selected, so no secret refs exist).
+/// `stream_requested` is recorded faithfully (audit P3 fix: it was
+/// hardcoded to false even for streaming requests).
 fn decision_json_placeholder(
     excluded: &[sair_persistence::repos::ExcludedCandidate],
+    stream_requested: bool,
 ) -> Option<String> {
     let exclusions: Vec<Value> = excluded
         .iter()
@@ -174,7 +177,7 @@ fn decision_json_placeholder(
     Some(
         serde_json::json!({
             "decision": { "exclusions": exclusions },
-            "streamed": false,
+            "streamed": stream_requested,
         })
         .to_string(),
     )
@@ -237,6 +240,22 @@ fn gemini_error_status(category: ErrorCategory) -> &'static str {
     }
 }
 
+/// Adds the correlation id to the family `shahid` block so clients can
+/// correlate an error response with the request record (audit P3 fix: the id
+/// was recorded but never surfaced). Empty id (pre-correlation local errors)
+/// is omitted.
+fn with_request_id(mut extra: Value, request_id: &str) -> Value {
+    if !request_id.is_empty()
+        && let Some(obj) = extra.as_object_mut()
+    {
+        obj.insert(
+            "request_id".to_string(),
+            Value::String(request_id.to_string()),
+        );
+    }
+    extra
+}
+
 /// Family-faithful error envelope (F-1/F-3/F-4): upstream failures on
 /// same-protocol surfaces preserve the upstream status; gateway-local errors
 /// use family-legal names with our code in `shahid`.
@@ -245,6 +264,7 @@ fn family_error_response(
     failure: &UpstreamFailure,
     alias: &str,
     exclusions: usize,
+    request_id: &str,
 ) -> Response {
     // F-1: same-protocol upstream failures keep the upstream status — for
     // 4xx/5xx only. Gateway-detected errors on a 2xx upstream response
@@ -258,12 +278,15 @@ fn family_error_response(
             ErrorCategory::Timeout => StatusCode::GATEWAY_TIMEOUT,
             _ => StatusCode::BAD_GATEWAY,
         });
-    let extra = json!({
-        "category": failure.category_str(),
-        "upstream_status": failure.status,
-        "alias": alias,
-        "excluded_candidates": exclusions,
-    });
+    let extra = with_request_id(
+        json!({
+            "category": failure.category_str(),
+            "upstream_status": failure.status,
+            "alias": alias,
+            "excluded_candidates": exclusions,
+        }),
+        request_id,
+    );
     match surface {
         Surface::OpenAiChat => openai_error(status, failure.category_str(), &failure.detail, extra),
         Surface::AnthropicMessages => (
@@ -306,7 +329,9 @@ fn family_local_error(
     code: &str,
     message: &str,
     extra: Value,
+    request_id: &str,
 ) -> Response {
+    let extra = with_request_id(extra, request_id);
     match surface {
         Surface::OpenAiChat => openai_error(status, code, message, extra),
         Surface::AnthropicMessages => (
@@ -426,6 +451,7 @@ async fn gemini_generate(
             "unknown_method",
             "expected `{model}:generateContent`",
             json!({}),
+            "", // pre-correlation local error
         );
     };
     if method != "generateContent" && method != "streamGenerateContent" {
@@ -435,6 +461,7 @@ async fn gemini_generate(
             "unknown_method",
             &format!("unknown Gemini method `{method}`"),
             json!({}),
+            "", // pre-correlation local error
         );
     }
     let stream_requested = method == "streamGenerateContent";
@@ -613,11 +640,12 @@ async fn process_chat(
                 "invalid_json",
                 &format!("request body is not valid JSON: {e}"),
                 json!({}),
+                &correlation,
             );
         }
     };
     if let Err((status, code, message)) = validate_request(surface, operation, &parsed) {
-        return family_local_error(surface, status, code, &message, json!({}));
+        return family_local_error(surface, status, code, &message, json!({}), &correlation);
     }
     // F-9: Gemini clients may send `?key=` — that form is rejected (the
     // token must never appear in URLs); the header form is the only auth.
@@ -644,6 +672,7 @@ async fn process_chat(
                 "storage_failure",
                 &format!("route snapshot unavailable: {e}"),
                 json!({}),
+                &correlation,
             );
         }
     };
@@ -654,6 +683,7 @@ async fn process_chat(
             "alias_not_found",
             &format!("no configured alias named `{alias}`"),
             json!({}),
+            &correlation,
         );
     }
 
@@ -666,6 +696,7 @@ async fn process_chat(
                 "storage_failure",
                 &format!("routing policy unavailable: {e}"),
                 json!({}),
+                &correlation,
             );
         }
     };
@@ -680,6 +711,7 @@ async fn process_chat(
                 "strategy_not_implemented",
                 &format!("routing strategy `{other}` is declared but not implemented"),
                 json!({}),
+                &correlation,
             );
         }
     };
@@ -726,7 +758,7 @@ async fn process_chat(
                     ),
                     alias: Some(alias.to_string()),
                     error_category: Some("no_eligible_deployment".to_string()),
-                    decision_json: decision_json_placeholder(&excluded),
+                    decision_json: decision_json_placeholder(&excluded, stream_requested),
                     ..RequestRecordInsert::default()
                 };
                 let _ = api.db.repos().insert_request_record(&record).await;
@@ -742,6 +774,7 @@ async fn process_chat(
                     "count_tokens_not_supported",
                     "count_tokens is only available for aliases with anthropic deployments",
                     json!({ "alias": alias }),
+                    &correlation,
                 );
             }
             // F-4: surface why every candidate was excluded (FR-012).
@@ -755,6 +788,7 @@ async fn process_chat(
                 &code,
                 &e.to_string(),
                 json!({ "alias": alias, "reasons": reasons }),
+                &correlation,
             );
         }
     };
@@ -780,12 +814,18 @@ async fn process_chat(
         if actual_attempts >= policy.max_attempts.max(1) as usize {
             break;
         }
-        if started.elapsed() > Duration::from_millis(policy.retry_budget_ms.max(1) as u64) {
+        // Floor at 1 s: a zero budget previously collapsed to 1 ms, which
+        // aborted the loop after two DB round-trips with a bare
+        // no_attempt_made 503 and no explanation (audit P3 fix).
+        if started.elapsed() > Duration::from_millis(policy.retry_budget_ms.max(1_000) as u64) {
             tracing::warn!(alias, "retry budget exhausted before rotation");
             break;
         }
-        // R4-02: dedupe credentials across deployments of the same provider.
-        if !attempted_credentials.insert(candidate.credential_id.clone()) {
+        // R4-02: dedupe credentials across deployments of the same provider —
+        // membership checked here, but inserted only AFTER a permit is
+        // acquired. A busy-skip must not poison the credential for a later
+        // deployment of the same provider that has a free slot (audit P2 fix).
+        if attempted_credentials.contains(&candidate.credential_id) {
             skipped_duplicates += 1;
             continue;
         }
@@ -802,16 +842,19 @@ async fn process_chat(
                 continue;
             }
         };
+        attempted_credentials.insert(candidate.credential_id.clone());
         actual_attempts += 1;
 
-        // Retrieve the secret at call time only (docs/06).
+        // Retrieve the secret at call time only (docs/06). A broken
+        // credential (malformed ref / missing vault item) rotates to the next
+        // candidate instead of aborting the whole alias (audit P3 fix).
         let secret_ref = match sair_vault::SecretRef::parse(&candidate.credential_secret_ref) {
             Ok(reference) => reference,
             Err(_) => {
                 last_failure = Some(UpstreamFailure::internal(
                     "stored credential reference is malformed",
                 ));
-                break;
+                continue;
             }
         };
         let secret = match api.vault.retrieve(&secret_ref) {
@@ -826,14 +869,19 @@ async fn process_chat(
                 last_failure = Some(UpstreamFailure::internal(
                     "credential secret missing from vault",
                 ));
-                break;
+                continue;
             }
             Err(e) => {
-                return openai_error(
+                // Vault-wide failure (not per-credential): surface in the
+                // family's own envelope (audit P2 fix — this previously sent
+                // an OpenAI-shaped error on the Anthropic/Gemini surfaces).
+                return family_local_error(
+                    surface,
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "vault_unavailable",
                     &format!("credential vault unavailable: {e}"),
                     json!({ "alias": alias }),
+                    &correlation,
                 );
             }
         };
@@ -1193,6 +1241,7 @@ async fn process_chat(
                             &failure,
                             alias,
                             decision.exclusions.len(),
+                            &correlation,
                         );
                     }
                 }
@@ -1212,7 +1261,13 @@ async fn process_chat(
             &decision_json,
         )
         .await;
-        return family_error_response(surface, &failure, alias, decision.exclusions.len());
+        return family_error_response(
+            surface,
+            &failure,
+            alias,
+            decision.exclusions.len(),
+            &correlation,
+        );
     }
     // R4-06: distinguish terminal states (actual upstream attempts, not
     // reserved credentials).
@@ -1223,6 +1278,7 @@ async fn process_chat(
             "deployment_busy",
             "every eligible deployment is at its concurrency bound",
             json!({ "alias": alias, "busy_deployments": busy_skips }),
+            &correlation,
         );
     }
     family_local_error(
@@ -1236,6 +1292,7 @@ async fn process_chat(
             "skipped_duplicates": skipped_duplicates,
             "busy_deployments": busy_skips,
         }),
+        &correlation,
     )
 }
 
@@ -1361,6 +1418,7 @@ mod tests {
     use std::time::Duration;
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use zeroize::Zeroizing;
 
     const TOKEN: &str = "0123456789abcdefghijklmnopqrstuvwxyz0";
     const SECRET: &[u8] = b"sk-upstream-live-key";
@@ -1405,7 +1463,7 @@ mod tests {
 
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()

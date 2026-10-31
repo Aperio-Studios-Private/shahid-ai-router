@@ -3676,6 +3676,7 @@ dependencies = [
  "tracing",
  "url",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -3699,6 +3700,7 @@ name = "sair-providers"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "chrono",
  "futures-core",
  "reqwest",
  "rustls",
@@ -4115,6 +4117,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "zeroize",
 ]
 
 [[package]]

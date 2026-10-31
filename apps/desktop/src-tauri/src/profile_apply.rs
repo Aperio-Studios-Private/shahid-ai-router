@@ -106,22 +106,23 @@ pub fn apply_content(
     use ring::digest::{SHA256, digest};
     if target.exists() {
         let bytes = std::fs::read(target).map_err(|e| format!("read failed: {e}"))?;
-        let hash = format!("{:x}", {
-            let d = digest(&SHA256, &bytes);
-            d.as_ref()
-                .iter()
-                .fold(0u128, |acc, b| (acc << 8) | u128::from(*b))
-        });
-        // Full hex without pulling a hex helper: recompute properly below.
         let hex: String = digest(&SHA256, &bytes)
             .as_ref()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let _ = hash;
-        if let Some(expected) = expected_existing
-            && expected != hex
-        {
+        // The hash precondition is REQUIRED when the target exists (audit P2
+        // fix): it was previously optional, so a caller that skipped it could
+        // silently overwrite a file changed since generation. The UI always
+        // passes the hash; the backend now enforces it too.
+        let Some(expected) = expected_existing else {
+            return Err(
+                "hash precondition required: call hash_profile_target first, then apply with \
+                 the same hash"
+                    .to_string(),
+            );
+        };
+        if expected != hex {
             return Err(
                 "file changed since preview (hash precondition failed); re-preview and retry"
                     .to_string(),

@@ -26,9 +26,13 @@ export function UsageScreen() {
 
   const refresh = useCallback(async () => {
     setError(null);
-    const data = await invokeOr<Usage>("usage_summary", {});
-    if (data) setUsage(data);
-    else setError("Usage data unavailable.");
+    try {
+      const data = await invokeOr<Usage>("usage_summary", {});
+      if (data) setUsage(data);
+      else setError("Usage data unavailable.");
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   useEffect(() => {

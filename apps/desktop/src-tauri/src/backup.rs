@@ -192,11 +192,29 @@ pub fn build_encrypted_envelope(
 /// Decrypts an encrypted envelope (passphrase + AAD verification; wrong
 /// passphrase/tampering → [`BackupError::AuthFailed`]). Blocking — callers
 /// wrap in spawn_blocking.
+///
+/// KDF parameters come from the (potentially attacker-supplied) file, so they
+/// are bounded before deriving: unbounded Argon2id memory/iterations would let
+/// a crafted 3 KB file exhaust RAM/CPU during preview (audit P2 fix).
 pub fn decrypt_envelope(envelope: &Envelope, passphrase: &str) -> Result<Value, BackupError> {
+    const KDF_M_KIB_MAX: u32 = 1_048_576; // 1 GiB (exports use 64 MiB)
+    const KDF_T_MAX: u32 = 10; // exports use 3
+    const KDF_P_MAX: u32 = 8; // exports use 1
     let kdf = envelope
         .kdf
         .as_ref()
         .ok_or_else(|| BackupError::Invalid("missing kdf params".to_string()))?;
+    if kdf.m_kib == 0
+        || kdf.m_kib > KDF_M_KIB_MAX
+        || kdf.t == 0
+        || kdf.t > KDF_T_MAX
+        || kdf.p == 0
+        || kdf.p > KDF_P_MAX
+    {
+        return Err(BackupError::Invalid(
+            "kdf parameters out of the allowed range".to_string(),
+        ));
+    }
     let salt = unb64(&kdf.salt_b64)?;
     let key_bytes = derive_key(passphrase, &salt)?;
     let combined = unb64(
@@ -380,8 +398,12 @@ pub async fn build_config_payload(db: &Db) -> Result<(Value, Vec<String>), Strin
     .collect();
     sections.push("models".to_string());
 
+    // `model` is the models-table NATURAL name (deployments.model_id is the
+    // models-row PK, which import cannot resolve by itself — audit P1 fix).
     let deployments: Vec<Value> = sqlx::query(
-        "SELECT id, provider_id, model_id, endpoint_override, enabled FROM deployments",
+        "SELECT d.id, d.provider_id, d.model_id, m.model_id AS model_name,
+                d.endpoint_override, d.enabled
+         FROM deployments d JOIN models m ON m.id = d.model_id",
     )
     .fetch_all(db.pool())
     .await
@@ -392,6 +414,7 @@ pub async fn build_config_payload(db: &Db) -> Result<(Value, Vec<String>), Strin
             "id": r.get::<String, _>("id"),
             "provider_id": r.get::<String, _>("provider_id"),
             "model_id": r.get::<String, _>("model_id"),
+            "model": r.get::<String, _>("model_name"),
             "endpoint_override": r.get::<Option<String>, _>("endpoint_override"),
             "enabled": r.get::<i64, _>("enabled"),
         })
@@ -420,11 +443,15 @@ pub async fn build_config_payload(db: &Db) -> Result<(Value, Vec<String>), Strin
     .collect();
     sections.push("routing_policies".to_string());
 
-    let aliases: Vec<Value> = sqlx::query(
-        "SELECT ma.id, ma.alias, ma.description, ma.policy_id,
-                ad.deployment_id, ad.priority
+    // Aliases are exported as UNIQUE rows carrying `policy_name` (resolved —
+    // policy row ids do not survive a restore) plus a `bindings` array of
+    // (provider_name, model natural name, priority) triples. The previous
+    // LEFT-JOIN shape emitted keys the importer never read, so policy links
+    // and bindings were silently lost on restore (audit P1 fix).
+    let mut aliases: Vec<Value> = sqlx::query(
+        "SELECT ma.id, ma.alias, ma.description, p.name AS policy_name
          FROM model_aliases ma
-         LEFT JOIN alias_deployments ad ON ad.alias_id = ma.id",
+         LEFT JOIN routing_policies p ON p.id = ma.policy_id",
     )
     .fetch_all(db.pool())
     .await
@@ -435,16 +462,49 @@ pub async fn build_config_payload(db: &Db) -> Result<(Value, Vec<String>), Strin
             "id": r.get::<String, _>("id"),
             "alias": r.get::<String, _>("alias"),
             "description": r.get::<Option<String>, _>("description"),
-            "policy_id": r.get::<Option<String>, _>("policy_id"),
-            "deployment_id": r.get::<Option<String>, _>("deployment_id"),
-            "priority": r.get::<Option<i64>, _>("priority"),
+            "policy_name": r.get::<Option<String>, _>("policy_name"),
+            "bindings": [],
         })
     })
     .collect();
+    let binding_rows = sqlx::query(
+        "SELECT ma.alias, pr.name AS provider_name, m.model_id AS model_name, ad.priority
+         FROM alias_deployments ad
+         JOIN model_aliases ma ON ma.id = ad.alias_id
+         JOIN deployments d ON d.id = ad.deployment_id
+         JOIN models m ON m.id = d.model_id
+         JOIN providers pr ON pr.id = d.provider_id
+         ORDER BY ma.alias, ad.priority, ma.id",
+    )
+    .fetch_all(db.pool())
+    .await
+    .map_err(|e| e.to_string())?;
+    for row in &binding_rows {
+        let alias: String = row.get("alias");
+        let binding = serde_json::json!({
+            "provider_name": row.get::<String, _>("provider_name"),
+            "model": row.get::<String, _>("model_name"),
+            "priority": row.get::<i64, _>("priority"),
+        });
+        if let Some(entry) = aliases.iter_mut().find(|a| a["alias"] == alias)
+            && let Some(b) = entry["bindings"].as_array_mut()
+        {
+            b.push(binding);
+        }
+    }
     sections.push("aliases".to_string());
 
+    // Alias REFERENCES in agent_profiles are model_aliases row ids, which do
+    // not survive a restore — export the alias NAMES instead so import can
+    // re-resolve them (audit P2 fix: profiles were exported but never
+    // importable due to dangling id references).
     let profiles: Vec<Value> = sqlx::query(
-        "SELECT agent_id, agent_version, protocol_family, endpoint, auth_method, model_alias, fast_alias, env_json, config_rules_json, notes FROM agent_profiles",
+        "SELECT ap.agent_id, ap.agent_version, ap.protocol_family, ap.endpoint, ap.auth_method,
+                ma.alias AS model_alias_name, fa.alias AS fast_alias_name,
+                ap.env_json, ap.config_rules_json, ap.notes
+         FROM agent_profiles ap
+         LEFT JOIN model_aliases ma ON ma.id = ap.model_alias
+         LEFT JOIN model_aliases fa ON fa.id = ap.fast_alias",
     )
     .fetch_all(db.pool())
     .await
@@ -457,8 +517,8 @@ pub async fn build_config_payload(db: &Db) -> Result<(Value, Vec<String>), Strin
             "protocol_family": r.get::<String, _>("protocol_family"),
             "endpoint": r.get::<String, _>("endpoint"),
             "auth_method": r.get::<String, _>("auth_method"),
-            "model_alias": r.get::<Option<String>, _>("model_alias"),
-            "fast_alias": r.get::<Option<String>, _>("fast_alias"),
+            "model_alias": r.get::<Option<String>, _>("model_alias_name"),
+            "fast_alias": r.get::<Option<String>, _>("fast_alias_name"),
             "env_json": serde_json::from_str::<Value>(&r.get::<String, _>("env_json")).unwrap_or(Value::Null),
             "config_rules_json": serde_json::from_str::<Value>(&r.get::<String, _>("config_rules_json")).unwrap_or(Value::Null),
             "notes": r.get::<Option<String>, _>("notes"),
@@ -596,5 +656,114 @@ mod tests {
     fn size_cap_rejected() {
         let big = vec![b'x'; 65 * 1024 * 1024];
         assert!(matches!(parse_envelope(&big), Err(BackupError::TooLarge)));
+    }
+
+    #[test]
+    fn kdf_params_from_the_file_are_bounded() {
+        // A crafted 3 KB backup must not make Argon2id allocate 4 GiB or run
+        // a million iterations (audit P2 fix).
+        use base64::Engine;
+        let mut envelope =
+            build_config_envelope("0.1.0", json!({"providers": []}), vec![]).unwrap();
+        envelope["mode"] = json!("encrypted");
+        let salt_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
+        envelope["kdf"] = json!({"m_kib": 4_000_000, "t": 3, "p": 1, "salt_b64": salt_b64});
+        let envelope: super::Envelope = serde_json::from_value(envelope).unwrap();
+        assert!(matches!(
+            decrypt_envelope(&envelope, "whatever"),
+            Err(BackupError::Invalid(_))
+        ));
+        let mut envelope = envelope;
+        envelope.kdf = Some(super::KdfParams {
+            m_kib: 65_536,
+            t: 1_000_000,
+            p: 1,
+            salt_b64: envelope.kdf.as_ref().unwrap().salt_b64.clone(),
+        });
+        assert!(matches!(
+            decrypt_envelope(&envelope, "whatever"),
+            Err(BackupError::Invalid(_))
+        ));
+    }
+
+    /// Regression test for the audit P1 import bugs: a config export must
+    /// restore deployments (natural-key `model`), alias policy links, and
+    /// alias→deployment bindings.
+    #[tokio::test]
+    async fn config_export_roundtrips_through_import() {
+        // Raw SQL seed (schema-shaped) on the source DB.
+        let db1 = sair_persistence::Db::open("sqlite::memory:").await.unwrap();
+        db1.run_migrations().await.unwrap();
+        for sql in [
+            "INSERT INTO providers (id, name, provider_type, base_url, enabled, notes, created_at, updated_at)
+             VALUES ('p1','Prov One','openai_compatible','https://api.example.com/v1',1,NULL,'t','t')",
+            "INSERT INTO routing_policies (id, name, strategy, max_attempts, retry_budget_ms, timeout_ms, cooldown_seconds, created_at, updated_at)
+             VALUES ('pol1','default','priority',3,130000,120000,60,'t','t')",
+            "INSERT INTO model_aliases (id, alias, description, policy_id, created_at, updated_at)
+             VALUES ('a1','fast-model',NULL,'pol1','t','t')",
+            "INSERT INTO models (id, provider_id, model_id, display_name, protocol_family, capabilities, created_at)
+             VALUES ('m1','p1','gpt-4o',NULL,'openai_chat','{}','t')",
+            "INSERT INTO deployments (id, provider_id, model_id, endpoint_override, enabled, created_at, updated_at)
+             VALUES ('d1','p1','m1',NULL,1,'t','t')",
+            "INSERT INTO alias_deployments (id, alias_id, deployment_id, priority)
+             VALUES ('ad1','a1','d1',10)",
+        ] {
+            sqlx::query(sql).execute(db1.pool()).await.unwrap();
+        }
+
+        let (payload, _sections) = super::build_config_payload(&db1).await.unwrap();
+        let envelope = build_config_envelope("0.1.0", payload, vec![]).unwrap();
+        let bytes = serde_json::to_vec(&envelope).unwrap();
+        let parsed = parse_envelope(&bytes).unwrap();
+
+        // Restore into a FRESH database (the disaster-recovery scenario).
+        let db2 = sair_persistence::Db::open("sqlite::memory:").await.unwrap();
+        db2.run_migrations().await.unwrap();
+        let report = crate::backup_import::stage_import(&db2, &parsed.data)
+            .await
+            .unwrap();
+        assert_eq!(report["providers"]["added"], 1, "{report}");
+        assert_eq!(report["models"]["added"], 1, "{report}");
+        assert_eq!(report["deployments"]["added"], 1, "{report}");
+        assert_eq!(report["deployments"]["skipped"], 0, "{report}");
+        assert_eq!(report["aliases"]["added"], 1, "{report}");
+
+        // The deployment resolved the models-row PK from the NATURAL name.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments d
+             JOIN models m ON m.id = d.model_id
+             JOIN providers p ON p.id = d.provider_id
+             WHERE p.name = 'Prov One' AND m.model_id = 'gpt-4o'",
+        )
+        .fetch_one(db2.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            row.0, 1,
+            "deployment must resolve via the natural model name"
+        );
+
+        // The alias policy link and the binding survived.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM model_aliases ma
+             JOIN routing_policies p ON p.id = ma.policy_id
+             WHERE ma.alias = 'fast-model' AND p.name = 'default'",
+        )
+        .fetch_one(db2.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "alias policy link must be restored");
+
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM alias_deployments ad
+             JOIN model_aliases ma ON ma.id = ad.alias_id
+             JOIN deployments d ON d.id = ad.deployment_id
+             JOIN models m ON m.id = d.model_id
+             WHERE ma.alias = 'fast-model' AND m.model_id = 'gpt-4o' AND ad.priority = 10",
+        )
+        .fetch_one(db2.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "alias→deployment binding must be restored");
     }
 }

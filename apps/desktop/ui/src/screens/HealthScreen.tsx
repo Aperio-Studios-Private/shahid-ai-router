@@ -34,7 +34,7 @@ function statusExplanation(c: CredentialHealth): string {
   if (c.status === "incomplete") {
     return "Imported without its secret — re-enter the key in API Keys.";
   }
-  if (c.cooldown_until && c.cooldown_until > new Date().toISOString()) {
+  if (c.cooldown_until && new Date(c.cooldown_until).getTime() > Date.now()) {
     return `Cooling down until ${c.cooldown_until} (rate limit / quota) — excluded from routing until then.`;
   }
   if (c.status === "active") {
@@ -50,13 +50,17 @@ export function HealthScreen() {
 
   const refresh = useCallback(async () => {
     setError(null);
-    const [creds, evts] = await Promise.all([
-      invokeOr<CredentialHealth[]>("credential_health_summary", {}),
-      invokeOr<HealthEvent[]>("list_health_events", { limit: 50 }),
-    ]);
-    if (creds) setCredentials(creds);
-    if (evts) setEvents(evts);
-    if (!creds && !evts) setError("Health data unavailable.");
+    try {
+      const [creds, evts] = await Promise.all([
+        invokeOr<CredentialHealth[]>("credential_health_summary", {}),
+        invokeOr<HealthEvent[]>("list_health_events", { limit: 50 }),
+      ]);
+      if (creds) setCredentials(creds);
+      if (evts) setEvents(evts);
+      if (!creds && !evts) setError("Health data unavailable.");
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   useEffect(() => {

@@ -38,12 +38,17 @@ pub enum ErrorCategory {
 impl ErrorCategory {
     /// Whether a failed request may be retried as-is without risk of harmful
     /// duplicate execution or guaranteed repeat failure (docs/05).
+    ///
+    /// `Timeout` is deliberately NOT here: generation may have executed
+    /// upstream, so retrying blindly risks duplicate cost — ADR-017 maps
+    /// Timeout to [`FailureAction::Stop`] ("timeout never rotates"). The two
+    /// predicates previously disagreed on Timeout; this one now matches
+    /// ADR-017 (audit P1 fix).
     #[must_use]
     pub fn is_safely_retryable(self) -> bool {
         matches!(
             self,
             ErrorCategory::RateLimited
-                | ErrorCategory::Timeout
                 | ErrorCategory::ProviderUnavailable
                 | ErrorCategory::TransportFailure
         )
@@ -158,9 +163,19 @@ mod tests {
     #[test]
     fn transient_categories_are_safely_retryable() {
         assert!(ErrorCategory::RateLimited.is_safely_retryable());
-        assert!(ErrorCategory::Timeout.is_safely_retryable());
         assert!(ErrorCategory::ProviderUnavailable.is_safely_retryable());
         assert!(ErrorCategory::TransportFailure.is_safely_retryable());
+    }
+
+    #[test]
+    fn timeout_is_never_safely_retryable() {
+        // ADR-017 ambiguous-timeout rule: generation may have executed
+        // upstream, so blind retry risks duplicate cost (audit P1 fix).
+        assert!(!ErrorCategory::Timeout.is_safely_retryable());
+        assert_eq!(
+            ErrorCategory::Timeout.rotation_action(),
+            super::FailureAction::Stop
+        );
     }
 
     #[test]

@@ -2,6 +2,31 @@
 
 All notable changes to Shahid AI Router. Format: Keep a Changelog; versioning: SemVer.
 
+## [Unreleased] — 2026-10-31 (post-audit fixes)
+
+Independent full-repository audit (every file, 11 reviewer agents); all P1/P2 findings fixed.
+Evidence: `reports/phase-reports/audit-fixes.md`; details in `tasks/COMPLETED.md` (AF-01..AF-13).
+
+### Fixed
+- Management UI: add provider / add model+deployment / bind alias forms always failed (snake_case IPC args vs Tauri v2 camelCase contract; required `structuredOutput` never sent). All data-entry flows now work.
+- Backup restore: config-mode imports could never commit (held slot was encrypted-only); every deployment was silently skipped on import (row-PK vs natural-name mismatch); alias policy links and bindings were never restored (export/import field mismatch); settings and agent_profiles exported but never imported; the import conflict report was a stub that always reported zero conflicts. Roundtrip regression test added.
+- Backup crypto: attacker-supplied Argon2id parameters (memory/iterations) are now bounded before derive — a crafted 3 KB file can no longer exhaust RAM/CPU during preview.
+- Adapters: response bodies are read incrementally with the 32 MiB cap enforced DURING the read (previously buffered fully first; count_tokens had no cap at all) — a hostile upstream can no longer exhaust memory.
+- Gateway: vault failures on the Anthropic/Gemini surfaces now answer in the family's own envelope (was OpenAI-shaped); a busy deployment no longer poisons its shared credential for later deployments; a broken credential rotates on instead of aborting the alias; error envelopes surface the correlation id (`shahid.request_id`); no-route records record the real `streamed` flag.
+- Gateway lifecycle: drain window now equals the caller's `stop(grace)` (was hardcoded 30 s); the in-flight counter uses an RAII guard so early future drops can no longer leak it upward; the concurrency permit is acquired only after token auth; removed a leftover debug `eprintln!` from the drain path.
+- Streaming: real mid-stream-drop test (raw-TCP upstream, exactly one upstream hit, partial frames relayed, credential untouched) replacing a zero-assertion stub.
+- Domain: `Timeout` is no longer "safely retryable" — the exported contract now matches ADR-017's timeout-never-rotates rule.
+- SSRF resolver: DNS runs on the blocking pool (no longer stalls tokio workers); `localhost` by name must resolve to a loopback address to inherit the cleartext exception.
+- Retry-After: HTTP-date form now parsed in all adapters; Gemini additionally reads the standard header; fractional Gemini `retryDelay` ("1.5s") rounds up instead of being dropped; Gemini model ids are percent-encoded in the URL path.
+- Icons: placeholder PNGs regenerated as RGBA + `icon.icns` generated — non-Windows `tauri::generate_context!` builds were broken with the shipped icons.
+- Telemetry: sensitive-field redaction list extended (secret_b64, refresh_token, access_token, bearer, passphrase, client_secret); profile verification date no longer hardcoded.
+- Bookkeeping: ADR-007 → Accepted; PRD FR-023 Codex amendment note; docs/05 v1-strategy/backoff status notes; docs/08 Screens section reconciled with the Models/Deployments fold; ROADMAP completion status; HANDOFF corrections (23 FR rows, phase-0 evidence pointer); task boards repaired (literal `\n` artifacts removed; stale "current phase" headers fixed); LICENSE artifact fixed.
+
+### Added
+- UI: Backup & Restore screen (export/preview/commit) and About screen; Models/Deployments nav entries now route to Providers per the docs/08 amendment; provider type options for Anthropic/Gemini; NVIDIA NIM documented as a supported OpenAI-compatible target (README, docs/04).
+- CI: `security` job (cargo-audit + npm audit) — the phase-11 evidence described an audit job the workflow never contained.
+- Tests: backup export→restore roundtrip, KDF-bound, real mid-stream-drop (142 cargo tests total, up from 139).
+
 ## [0.1.0] — 2026-10-30
 
 ### Added (Phase 0 — Discovery)

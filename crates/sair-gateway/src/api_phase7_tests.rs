@@ -14,6 +14,7 @@ mod phase7_tests {
     use std::time::Duration;
     use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{MockServer, ResponseTemplate};
+    use zeroize::Zeroizing;
 
     const TOKEN: &str = "0123456789abcdefghijklmnopqrstuvwxyz0";
 
@@ -76,7 +77,7 @@ mod phase7_tests {
 
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()
@@ -256,7 +257,7 @@ mod phase7_tests {
             .unwrap();
         let api = Arc::new(ApiDeps::new(db, vault, 4, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api),
             ..GatewayConfig::default()
@@ -347,7 +348,7 @@ mod phase7_tests {
         }
         let api = Arc::new(ApiDeps::new(db, vault, 1, Default::default(), 300_000));
         let config = GatewayConfig {
-            token: Arc::new(TOKEN.as_bytes().to_vec()),
+            token: Arc::new(Zeroizing::new(TOKEN.as_bytes().to_vec())),
             port: 0,
             api: Some(api.clone()),
             ..GatewayConfig::default()

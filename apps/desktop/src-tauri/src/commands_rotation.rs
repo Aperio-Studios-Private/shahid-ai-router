@@ -172,7 +172,11 @@ pub async fn generate_agent_profile(
         "rollback": profile.rollback,
         "limitations": profile.limitations,
         "applicable": profile.applicable,
-        "verification": format!("{} on 2026-10-31 (contract tests)", sair_domain::profiles::VERIFICATION_PREFIX),
+        "verification": format!(
+            "{} on {} (contract tests)",
+            sair_domain::profiles::VERIFICATION_PREFIX,
+            chrono::Utc::now().format("%Y-%m-%d")
+        ),
     }))
 }
 
@@ -285,10 +289,13 @@ pub async fn export_backup(
     }
 }
 
-/// Held decrypted payload for the two-step import (F-3: SecretBytes + TTL).
+/// Held payload for the two-step import (F-3: SecretBytes + TTL). `mode`
+/// is captured at preview time so commit never re-reads the file (no TOCTOU
+/// between preview and commit).
 struct HeldImport {
     payload_bytes: sair_vault::SecretBytes,
     expires: Instant,
+    mode: String,
 }
 
 fn held_import_slot() -> &'static tokio::sync::Mutex<Option<(String, HeldImport)>> {
@@ -300,38 +307,43 @@ const IMPORT_TTL: Duration = Duration::from_secs(600);
 
 #[tauri::command]
 pub async fn preview_backup(
-    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     path: String,
     passphrase: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let bytes = backup::read_backup_file(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     let envelope = backup::parse_envelope(&bytes).map_err(|e| e.to_string())?;
     let counts = json_counts(&envelope);
-    let mut conflicts = serde_json::json!({});
-    if envelope.mode == "encrypted" {
+    // Both modes hold the payload for commit (audit P1 fix: config mode
+    // previously could never commit because only encrypted previews were
+    // held). Config payloads are not secret; SecretBytes is a harmless
+    // zeroizing wrapper for them.
+    let payload = if envelope.mode == "encrypted" {
         let Some(passphrase) = passphrase else {
             return Err("a passphrase is required for encrypted backups".to_string());
         };
         let envelope_clone = envelope.clone();
-        let passphrase = passphrase.clone();
-        let payload = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             backup::decrypt_envelope(&envelope_clone, &passphrase)
         })
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-        conflicts = conflict_report(&app, &payload).await?;
-        // F-3: hold as SecretBytes with TTL; commit re-reads from here.
-        let sealed = backup::seal_decrypted(payload);
-        let mut held = held_import_slot().lock().await;
-        *held = Some((
-            path.clone(),
-            HeldImport {
-                payload_bytes: sealed,
-                expires: Instant::now() + IMPORT_TTL,
-            },
-        ));
-    }
+        .map_err(|e| e.to_string())?
+    } else {
+        envelope.data.clone()
+    };
+    let conflicts = conflict_report(&state.db, &payload).await?;
+    // F-3: hold as SecretBytes with TTL; commit re-reads from here.
+    let sealed = backup::seal_decrypted(payload);
+    let mut held = held_import_slot().lock().await;
+    *held = Some((
+        path.clone(),
+        HeldImport {
+            payload_bytes: sealed,
+            expires: Instant::now() + IMPORT_TTL,
+            mode: envelope.mode.clone(),
+        },
+    ));
     Ok(serde_json::json!({
         "mode": envelope.mode,
         "created_at": envelope.created_at,
@@ -363,14 +375,143 @@ fn json_counts(envelope: &backup::Envelope) -> Value {
     })
 }
 
-async fn conflict_report(app: &tauri::AppHandle, payload: &Value) -> Result<Value, String> {
-    let _ = app;
+/// Real conflict detection (audit P2 fix: the stub always reported zero).
+/// Reports the natural keys the importer would SKIP, per section, so the
+/// consent dialog shows what already exists locally.
+async fn conflict_report(db: &sair_persistence::Db, payload: &Value) -> Result<Value, String> {
     let mut conflicts = serde_json::Map::new();
-    if let Some(_aliases) = payload.get("aliases").and_then(Value::as_array) {
-        let existing: Vec<String> = Vec::new();
-        let _ = existing;
-        conflicts.insert("aliases".to_string(), Value::Array(Vec::new()));
+
+    let mut provider_keys = Vec::new();
+    for item in payload
+        .get("providers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM providers WHERE id = ?1")
+                .bind(id)
+                .fetch_one(db.pool())
+                .await
+                .map_err(|e| e.to_string())?;
+            if exists > 0 {
+                provider_keys.push(id.to_string());
+            }
+        }
     }
+    conflicts.insert(
+        "providers".to_string(),
+        Value::Array(provider_keys.into_iter().map(Value::String).collect()),
+    );
+
+    let mut alias_keys = Vec::new();
+    for item in payload
+        .get("aliases")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(alias) = item.get("alias").and_then(Value::as_str) {
+            let exists: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM model_aliases WHERE alias = ?1")
+                    .bind(alias)
+                    .fetch_one(db.pool())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if exists > 0 {
+                alias_keys.push(alias.to_string());
+            }
+        }
+    }
+    conflicts.insert(
+        "aliases".to_string(),
+        Value::Array(alias_keys.into_iter().map(Value::String).collect()),
+    );
+
+    let mut credential_keys = Vec::new();
+    for item in payload
+        .get("credentials")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(provider_id), Some(label)) = (
+            item.get("provider_id").and_then(Value::as_str),
+            item.get("label").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM credentials WHERE provider_id = ?1 AND label = ?2",
+        )
+        .bind(provider_id)
+        .bind(label)
+        .fetch_one(db.pool())
+        .await
+        .map_err(|e| e.to_string())?;
+        if exists > 0 {
+            credential_keys.push(format!("{provider_id}/{label}"));
+        }
+    }
+    conflicts.insert(
+        "credentials".to_string(),
+        Value::Array(credential_keys.into_iter().map(Value::String).collect()),
+    );
+
+    let mut model_keys = Vec::new();
+    for item in payload
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(provider_id), Some(model_id)) = (
+            item.get("provider_id").and_then(Value::as_str),
+            item.get("model_id").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM models WHERE provider_id = ?1 AND model_id = ?2",
+        )
+        .bind(provider_id)
+        .bind(model_id)
+        .fetch_one(db.pool())
+        .await
+        .map_err(|e| e.to_string())?;
+        if exists > 0 {
+            model_keys.push(format!("{provider_id}/{model_id}"));
+        }
+    }
+    conflicts.insert(
+        "models".to_string(),
+        Value::Array(model_keys.into_iter().map(Value::String).collect()),
+    );
+
+    let mut policy_keys = Vec::new();
+    for item in payload
+        .get("routing_policies")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(name) = item.get("name").and_then(Value::as_str) {
+            let exists: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM routing_policies WHERE name = ?1")
+                    .bind(name)
+                    .fetch_one(db.pool())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if exists > 0 {
+                policy_keys.push(name.to_string());
+            }
+        }
+    }
+    conflicts.insert(
+        "routing_policies".to_string(),
+        Value::Array(policy_keys.into_iter().map(Value::String).collect()),
+    );
+
     Ok(Value::Object(conflicts))
 }
 
@@ -398,10 +539,11 @@ pub async fn commit_backup(
         .await
         .map_err(|e| e.to_string())?;
     // F-2: re-store decrypted secrets into the destination vault AFTER the
-    // DB commit (only when the user opted in).
+    // DB commit (only when the user opted in). The mode captured at preview
+    // time is authoritative — commit never re-reads the file.
     let mut restored = 0u64;
     if re_store_secrets
-        && envelope_was_encrypted(&path)?
+        && held_payload.mode == "encrypted"
         && let Some(credentials) = payload.get("credentials").and_then(Value::as_array)
     {
         for credential in credentials {
@@ -454,10 +596,4 @@ pub async fn commit_backup(
             "secrets re-stored into the OS vault"
         },
     }))
-}
-
-fn envelope_was_encrypted(path: &str) -> Result<bool, String> {
-    let bytes = backup::read_backup_file(std::path::Path::new(path)).map_err(|e| e.to_string())?;
-    let envelope = backup::parse_envelope(&bytes).map_err(|e| e.to_string())?;
-    Ok(envelope.mode == "encrypted")
 }

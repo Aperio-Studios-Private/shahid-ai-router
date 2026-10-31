@@ -9,6 +9,8 @@ import { AgentIntegrationsScreen } from "./screens/AgentIntegrationsScreen";
 import { LogsScreen } from "./screens/LogsScreen";
 import { UsageScreen } from "./screens/UsageScreen";
 import { HealthScreen } from "./screens/HealthScreen";
+import { BackupScreen } from "./screens/BackupScreen";
+import { AboutScreen } from "./screens/AboutScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
 
 function useTheme(): [boolean, () => void] {
@@ -26,9 +28,13 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void invokeOr<AppInfo>("get_app_info").then((info) => {
-      if (!cancelled) setAppInfo(info);
-    });
+    invokeOr<AppInfo>("get_app_info")
+      .then((info) => {
+        if (!cancelled) setAppInfo(info);
+      })
+      .catch(() => {
+        // Browser preview has no Tauri bridge; leave the fallback label.
+      });
     return () => {
       cancelled = true;
     };
@@ -78,7 +84,11 @@ export default function App() {
           <OverviewScreen appInfo={appInfo} />
         ) : active === "gateway" ? (
           <GatewayScreen />
-        ) : active === "providers" || active === "api-keys" ? (
+        ) : active === "providers" ||
+          active === "api-keys" ||
+          active === "models" ||
+          active === "deployments" ? (
+          // docs/08 amendment: Models/Deployments fold into Providers.
           <ProvidersScreen />
         ) : active === "routing" ? (
           <AliasesScreen />
@@ -90,6 +100,10 @@ export default function App() {
           <UsageScreen />
         ) : active === "health" ? (
           <HealthScreen />
+        ) : active === "backup" ? (
+          <BackupScreen />
+        ) : active === "about" ? (
+          <AboutScreen appInfo={appInfo} />
         ) : (
           <PlaceholderScreen
             title={SCREENS.find((s) => s.id === active)?.label ?? ""}

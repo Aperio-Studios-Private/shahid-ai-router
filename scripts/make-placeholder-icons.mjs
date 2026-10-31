@@ -38,7 +38,7 @@ function chunk(type, data) {
 
 /** Renders a 1024x1024 RGBA canvas: brand blue field, white "S" block. */
 function renderCanvas(size) {
-  const px = Buffer.alloc(size * size * 3);
+  const px = Buffer.alloc(size * size * 4);
   const R = 0x00, G = 0x6e, B = 0xb9; // brand blue (#006eb9)
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -47,8 +47,9 @@ function renderCanvas(size) {
       const inBand = v > 0.42 && v < 0.58 && u > 0.18 && u < 0.82;
       const inDot = Math.hypot(u - 0.5, v - 0.75) < 0.06;
       const color = inBand || inDot ? [255, 255, 255] : [R, G, B];
-      const i = (y * size + x) * 3;
+      const i = (y * size + x) * 4;
       px[i] = color[0]; px[i + 1] = color[1]; px[i + 2] = color[2];
+      px[i + 3] = 0xff; // opaque alpha — tauri::generate_context! requires RGBA
     }
   }
   return px;
@@ -60,8 +61,8 @@ function encodePng(size, px) {
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
   ihdr[8] = 8;  // bit depth
-  ihdr[9] = 2;  // color type RGB
-  const stride = size * 3;
+  ihdr[9] = 6;  // color type RGBA (tauri requires an alpha channel)
+  const stride = size * 4;
   const raw = Buffer.alloc((stride + 1) * size);
   for (let y = 0; y < size; y++) {
     raw[y * (stride + 1)] = 0; // filter none
@@ -77,17 +78,33 @@ function encodePng(size, px) {
 
 /** Nearest-neighbor downscale. */
 function resize(px, from, to) {
-  const out = Buffer.alloc(to * to * 3);
+  const out = Buffer.alloc(to * to * 4);
   for (let y = 0; y < to; y++) {
     for (let x = 0; x < to; x++) {
       const sx = Math.min(from - 1, Math.floor((x / to) * from));
       const sy = Math.min(from - 1, Math.floor((y / to) * from));
-      const si = (sy * from + sx) * 3;
-      const di = (y * to + x) * 3;
-      out[di] = px[si]; out[di + 1] = px[si + 1]; out[di + 2] = px[si + 2];
+      const si = (sy * from + sx) * 4;
+      const di = (y * to + x) * 4;
+      out[di] = px[si]; out[di + 1] = px[si + 1]; out[di + 2] = px[si + 2]; out[di + 3] = px[si + 3];
     }
   }
   return out;
+}
+
+/** ICNS wrapping PNG-compressed entries (ic07/ic08/ic09), so the icon list
+ *  in tauri.conf.json resolves on macOS bundles. */
+function encodeIcns(pngs) {
+  const entries = pngs.map(([type, png]) => {
+    const head = Buffer.alloc(8);
+    head.write(type, 0, "ascii");
+    head.writeUInt32BE(png.length + 8, 4);
+    return Buffer.concat([head, png]);
+  });
+  const total = 8 + entries.reduce((n, e) => n + e.length, 0);
+  const head = Buffer.alloc(8);
+  head.write("icns", 0, "ascii");
+  head.writeUInt32BE(total, 4);
+  return Buffer.concat([head, ...entries]);
 }
 
 /** ICO wrapping a PNG entry (Vista+ supports PNG-compressed icons). */
@@ -113,4 +130,13 @@ writeFileSync(join(outDir, "icon.ico"), encodeIco(png1024));
 writeFileSync(join(outDir, "32x32.png"), encodePng(32, resize(base, 1024, 32)));
 writeFileSync(join(outDir, "128x128.png"), encodePng(128, resize(base, 1024, 128)));
 writeFileSync(join(outDir, "128x128@2x.png"), encodePng(256, resize(base, 1024, 256)));
+// macOS bundle icon (referenced by tauri.conf.json but previously missing).
+writeFileSync(
+  join(outDir, "icon.icns"),
+  encodeIcns([
+    ["ic07", encodePng(128, resize(base, 1024, 128))],
+    ["ic08", encodePng(256, resize(base, 1024, 256))],
+    ["ic09", encodePng(512, resize(base, 1024, 512))],
+  ]),
+);
 console.log("icons written to", outDir);

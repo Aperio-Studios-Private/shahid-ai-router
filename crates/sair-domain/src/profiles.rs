@@ -35,11 +35,17 @@ pub struct GeneratedProfile {
 }
 
 fn claude_code_profile(port: u16, alias: String, fast_alias: Option<String>) -> GeneratedProfile {
+    // JSON-escape user-supplied aliases so a quote/backslash/newline cannot
+    // produce an invalid settings.json (audit P2 fix).
+    let alias_json = serde_json::to_string(&alias).unwrap_or_else(|_| "\"\"".to_string());
     let fast = fast_alias
-        .map(|a| format!(",\n    \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"{a}\""))
+        .map(|a| {
+            let a_json = serde_json::to_string(&a).unwrap_or_else(|_| "\"\"".to_string());
+            format!(",\n    \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": {a_json}")
+        })
         .unwrap_or_default();
     let config = format!(
-        "{{\n    \"env\": {{\n    \"ANTHROPIC_BASE_URL\": \"http://127.0.0.1:{port}\",\n    \"ANTHROPIC_AUTH_TOKEN\": \"{TOKEN_PLACEHOLDER}\",\n    \"ANTHROPIC_MODEL\": \"{alias}\"{fast}\n    }}\n}}\n"
+        "{{\n    \"env\": {{\n    \"ANTHROPIC_BASE_URL\": \"http://127.0.0.1:{port}\",\n    \"ANTHROPIC_AUTH_TOKEN\": \"{TOKEN_PLACEHOLDER}\",\n    \"ANTHROPIC_MODEL\": {alias_json}{fast}\n    }}\n}}\n"
     );
     GeneratedProfile {
         agent_id: "claude-code",
@@ -83,8 +89,10 @@ fn gemini_cli_profile(port: u16, _alias: String) -> GeneratedProfile {
 }
 
 fn generic_openai_profile(port: u16, alias: String) -> GeneratedProfile {
+    // Escape for both the snippet's quoted strings and the shell example.
+    let alias_safe = alias.replace('\\', "\\\\").replace('"', "\\\"");
     let config = format!(
-        "# Generic OpenAI-compatible client\nbase_url = \"http://127.0.0.1:{port}/v1\"\napi_key = \"{TOKEN_PLACEHOLDER}\" # sent as Authorization: Bearer\nmodel = \"{alias}\"\n\n# curl:\n# curl http://127.0.0.1:{port}/v1/chat/completions \\\n#   -H \"Authorization: Bearer $GATEWAY_TOKEN\" \\\n#   -d '{{\"model\":\"{alias}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}]}}'\n"
+        "# Generic OpenAI-compatible client\nbase_url = \"http://127.0.0.1:{port}/v1\"\napi_key = \"{TOKEN_PLACEHOLDER}\" # sent as Authorization: Bearer\nmodel = \"{alias_safe}\"\n\n# curl:\n# curl http://127.0.0.1:{port}/v1/chat/completions \\\n#   -H \"Authorization: Bearer <<GATEWAY_TOKEN>>\" \\\n#   -d '{{\"model\":\"{alias_safe}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}]}}'\n"
     );
     GeneratedProfile {
         agent_id: "generic-openai",

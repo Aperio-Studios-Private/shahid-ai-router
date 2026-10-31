@@ -54,5 +54,28 @@ jobs:
       - name: Production build
         run: npm run build
 
-  # Phase 11 adds: tauri bundle builds, security audit job (cargo-deny/cargo-audit),
-  # accessibility checks, clean-machine install verification.
+  # Dependency audit (Phase 11 plan F-11-2): the phase-11 report and
+  # CHANGELOG record `cargo audit` + `npm audit` runs with 0 vulnerabilities;
+  # this job makes the claim part of the pipeline (audit P1 fix — the
+  # workflow previously never contained the job the evidence described).
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo-audit
+        run: |
+          cargo install cargo-audit --locked --quiet
+          cargo audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+      - name: npm-audit
+        working-directory: apps/desktop/ui
+        run: npm audit --omit=dev
+
+  # Post-v1 candidates: tauri bundle builds, accessibility checks,
+  # clean-machine install verification.

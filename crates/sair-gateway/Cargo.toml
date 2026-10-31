@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+# Gateway token bytes are wiped on drop (audit P3 hardening).
+zeroize = { workspace = true }
 futures-core = "0.3"
 bytes = "1"
 reqwest = { workspace = true }

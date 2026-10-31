@@ -40,8 +40,12 @@ export function ProvidersScreen() {
   const [modelForm, setModelForm] = useState({ model_id: "", protocol_family: "openai_chat" });
 
   const refresh = useCallback(async () => {
-    const list = await invokeOr<Provider[]>("list_providers", {});
-    if (list) setProviders(list);
+    try {
+      const list = await invokeOr<Provider[]>("list_providers", {});
+      if (list) setProviders(list);
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   useEffect(() => {
@@ -63,9 +67,15 @@ export function ProvidersScreen() {
 
   const testProvider = async (id: string) => {
     setBusy("loading");
-    const result = await invokeOr<{ ok: boolean; status?: number; detail?: string }>("test_provider", { id });
-    setBusy("idle");
-    setError(result && !result.ok ? `test failed: ${result.detail ?? `HTTP ${result.status}`}` : null);
+    setError(null);
+    try {
+      const result = await invokeOr<{ ok: boolean; status?: number; detail?: string }>("test_provider", { id });
+      setBusy("idle");
+      setError(result && !result.ok ? `test failed: ${result.detail ?? `HTTP ${result.status}`}` : null);
+    } catch (err) {
+      setBusy("error");
+      setError(String(err));
+    }
   };
 
   return (
@@ -128,15 +138,27 @@ export function ProvidersScreen() {
         className="mt-2 grid max-w-xl grid-cols-1 gap-2 text-sm"
         onSubmit={(e) => {
           e.preventDefault();
-          void run(() => invokeOr("add_provider", { ...form, notes: null }));
+          // Tauri v2 maps JS camelCase keys to Rust snake_case params; the
+          // form state is snake_case, so map explicitly (audit P1 fix).
+          void run(() =>
+            invokeOr("add_provider", {
+              name: form.name,
+              providerType: form.provider_type,
+              baseUrl: form.base_url,
+              allowLoopback: form.allow_loopback,
+              notes: null,
+            }),
+          );
         }}
       >
-        <input required placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-900" />
-        <input required placeholder="Base URL (https://…)" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900" />
-        <select value={form.provider_type} onChange={(e) => setForm({ ...form, provider_type: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-900">
-          <option value="openai_compatible">OpenAI-compatible</option>
+        <input required placeholder="Name" aria-label="Provider name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-900" />
+        <input required placeholder="Base URL (https://…, include /v1 for OpenAI-style APIs)" aria-label="Base URL" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900" />
+        <select aria-label="Provider type" value={form.provider_type} onChange={(e) => setForm({ ...form, provider_type: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-900">
+          <option value="openai_compatible">OpenAI-compatible (OpenAI, NVIDIA NIM, local servers…)</option>
           <option value="openai">OpenAI</option>
           <option value="openrouter">OpenRouter</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
         </select>
         <label className="flex items-center gap-2 text-xs">
           <input type="checkbox" checked={form.allow_loopback} onChange={(e) => setForm({ ...form, allow_loopback: e.target.checked })} />
@@ -162,9 +184,14 @@ function CredentialsPanel({
   run: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [panelError, setPanelError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
-    const list = await invokeOr<Credential[]>("list_credentials", { providerId });
-    if (list) setCredentials(list);
+    try {
+      const list = await invokeOr<Credential[]>("list_credentials", { providerId });
+      if (list) setCredentials(list);
+    } catch (err) {
+      setPanelError(String(err));
+    }
   }, [providerId]);
   useEffect(() => {
     void refresh();
@@ -173,6 +200,11 @@ function CredentialsPanel({
   return (
     <div>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">API keys</h3>
+      {panelError && (
+        <p role="alert" className="mt-1 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+          {panelError}
+        </p>
+      )}
       <ul className="mt-1 space-y-1">
         {credentials.map((c) => (
           <li key={c.id} className="flex items-center justify-between rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-800">
@@ -209,10 +241,10 @@ function CredentialsPanel({
           });
         }}
       >
-        <input required placeholder="Label" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} className="w-32 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
-        <input required type="password" placeholder="Secret (never stored in the app DB)" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} className="w-56 rounded border border-zinc-300 px-2 py-1 font-mono dark:border-zinc-700 dark:bg-zinc-900" />
-        <input type="number" placeholder="Priority" value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} className="w-20 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
-        <input type="number" min={1} placeholder="Weight" value={form.weight} onChange={(e) => setForm({ ...form, weight: Number(e.target.value) })} className="w-16 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+        <input required placeholder="Label" aria-label="Credential label" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} className="w-32 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+        <input required type="password" placeholder="Secret (never stored in the app DB)" aria-label="API secret" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} className="w-56 rounded border border-zinc-300 px-2 py-1 font-mono dark:border-zinc-700 dark:bg-zinc-900" />
+        <input type="number" placeholder="Priority" aria-label="Priority" value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} className="w-20 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
+        <input type="number" min={1} placeholder="Weight" aria-label="Weight" value={form.weight} onChange={(e) => setForm({ ...form, weight: Number(e.target.value) })} className="w-16 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
         <button type="submit" className="rounded bg-[#006eb9] px-2 py-1 font-medium text-white">Add key</button>
       </form>
     </div>
@@ -231,9 +263,14 @@ function DeploymentsPanel({
   run: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [panelError, setPanelError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
-    const list = await invokeOr<Deployment[]>("list_deployments", { providerId });
-    if (list) setDeployments(list);
+    try {
+      const list = await invokeOr<Deployment[]>("list_deployments", { providerId });
+      if (list) setDeployments(list);
+    } catch (err) {
+      setPanelError(String(err));
+    }
   }, [providerId]);
   useEffect(() => {
     void refresh();
@@ -242,6 +279,11 @@ function DeploymentsPanel({
   return (
     <div>
       <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Deployments</h3>
+      {panelError && (
+        <p role="alert" className="mt-1 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+          {panelError}
+        </p>
+      )}
       <ul className="mt-1 space-y-1">
         {deployments.map((d) => (
           <li key={d.id} className="flex items-center justify-between rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-800">
@@ -264,24 +306,28 @@ function DeploymentsPanel({
           void run(async () => {
             const modelPk = await invokeOr<string>("add_model", {
               providerId,
-              ...modelForm,
+              // camelCase keys required by the Tauri bridge (audit P1 fix);
+              // capabilities default off — edit later via update_model_capabilities.
+              modelId: modelForm.model_id,
+              protocolFamily: modelForm.protocol_family,
               streaming: false,
-              tool_calling: false,
+              toolCalling: false,
               vision: false,
-              context_window: null,
+              structuredOutput: false,
+              contextWindow: null,
             });
             if (modelPk) {
-              await invokeOr("add_deployment", { providerId, model_pk: modelPk, endpoint_override: null });
+              await invokeOr("add_deployment", { providerId, modelPk, endpointOverride: null });
             }
             setModelForm({ model_id: "", protocol_family: "openai_chat" });
           });
         }}
       >
-        <input required placeholder="Upstream model id" value={modelForm.model_id} onChange={(e) => setModelForm({ ...modelForm, model_id: e.target.value })} className="w-44 rounded border border-zinc-300 px-2 py-1 font-mono dark:border-zinc-700 dark:bg-zinc-900" />
-        <select value={modelForm.protocol_family} onChange={(e) => setModelForm({ ...modelForm, protocol_family: e.target.value })} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
+        <input required placeholder="Upstream model id" aria-label="Upstream model id" value={modelForm.model_id} onChange={(e) => setModelForm({ ...modelForm, model_id: e.target.value })} className="w-44 rounded border border-zinc-300 px-2 py-1 font-mono dark:border-zinc-700 dark:bg-zinc-900" />
+        <select aria-label="Protocol family" value={modelForm.protocol_family} onChange={(e) => setModelForm({ ...modelForm, protocol_family: e.target.value })} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
           <option value="openai_chat">openai_chat</option>
-          <option value="anthropic_messages">anthropic_messages (Phase 6)</option>
-          <option value="gemini_generate_content">gemini (Phase 6)</option>
+          <option value="anthropic_messages">anthropic_messages</option>
+          <option value="gemini_generate_content">gemini</option>
         </select>
         <button type="submit" className="rounded bg-[#006eb9] px-2 py-1 font-medium text-white">Add deployment</button>
       </form>

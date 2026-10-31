@@ -91,19 +91,22 @@ pub async fn send_messages(
         .headers()
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(|s| s.min(3600));
+        .and_then(|v| crate::http::parse_retry_after(v, 3600));
 
-    let bytes = response.bytes().await.map_err(|e| classify_transport(&e))?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(UpstreamFailure {
-            category: ErrorCategory::TransportFailure,
-            status: Some(status),
-            code: Some("response_too_large".to_string()),
-            detail: format!("upstream body exceeded {MAX_RESPONSE_BYTES} bytes"),
-            retry_after_secs: None,
-        });
-    }
+    // Bounded INCREMENTAL read (audit P1 fix).
+    let bytes = match crate::http::read_body_bounded(response, MAX_RESPONSE_BYTES).await {
+        Ok(b) => b,
+        Err(crate::http::BodyLimitError::TooLarge { limit }) => {
+            return Err(UpstreamFailure {
+                category: ErrorCategory::TransportFailure,
+                status: Some(status),
+                code: Some("response_too_large".to_string()),
+                detail: format!("upstream body exceeded {limit} bytes"),
+                retry_after_secs: None,
+            });
+        }
+        Err(crate::http::BodyLimitError::Transport(e)) => return Err(classify_transport(&e)),
+    };
     let parsed: Value = serde_json::from_slice(&bytes).map_err(|e| UpstreamFailure {
         category: ErrorCategory::Unknown,
         status: Some(status),
@@ -293,7 +296,21 @@ pub async fn count_tokens(
 
     let response = request.send().await.map_err(|e| classify_transport(&e))?;
     let status = response.status().as_u16();
-    let bytes = response.bytes().await.map_err(|e| classify_transport(&e))?;
+    // Bounded INCREMENTAL read (audit P1 fix: count_tokens previously had no
+    // size bound at all).
+    let bytes = match crate::http::read_body_bounded(response, MAX_RESPONSE_BYTES).await {
+        Ok(b) => b,
+        Err(crate::http::BodyLimitError::TooLarge { limit }) => {
+            return Err(UpstreamFailure {
+                category: ErrorCategory::TransportFailure,
+                status: Some(status),
+                code: Some("response_too_large".to_string()),
+                detail: format!("upstream body exceeded {limit} bytes"),
+                retry_after_secs: None,
+            });
+        }
+        Err(crate::http::BodyLimitError::Transport(e)) => return Err(classify_transport(&e)),
+    };
     let parsed: Value = serde_json::from_slice(&bytes).map_err(|e| UpstreamFailure {
         category: ErrorCategory::Unknown,
         status: Some(status),

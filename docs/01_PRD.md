@@ -34,4 +34,4 @@ Every requirement must map to tasks and executable tests or documented manual ac
 - FR-020 History retention: metadata-only request records default to 30-day retention with automatic cleanup.
 - FR-021 Upstream concurrency bound: per-deployment concurrency semaphore, configurable.
 - FR-022 Lifecycle transparency: v1 gateway runs only while the app process runs; UI states this.
-- FR-023 Routing scope (ADR-009/010): v1 routes same-protocol only; Anthropic surface includes `/v1/messages/count_tokens`; `/v1/responses` out of scope v1 (Codex CLI profiles pin `wire_api="chat"`).
+- FR-023 Routing scope (ADR-009/010): v1 routes same-protocol only; Anthropic surface includes `/v1/messages/count_tokens`; `/v1/responses` out of scope v1. (Amendment 2026-10-31, ADR-010: Codex CLI REMOVED `wire_api="chat"` upstream, so no Codex profile ships — Codex is documented-unsupported in v1; the original `wire_api="chat"` rationale is obsolete.)

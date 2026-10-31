@@ -9,8 +9,8 @@ Overview; Providers (includes API Keys, Models and Deployments — grouped per t
 ## Screens
 Dashboard: gateway state, endpoint, provider/credential health, aliases, request/error/latency summaries.
 Providers: search, add/edit/test/enable/disable.
-API Keys: masked values, labels, health, cooldown, account grouping.
-Models/deployments: provider IDs, aliases, capabilities, verification date.
+API Keys (within Providers): masked values, labels, health, cooldown, account grouping.
+Models/deployments (within Providers): provider IDs, aliases, capabilities, verification date. (Amendment 2026-10-31, audit fix: the Screens section previously still listed these as separate screens, contradicting the Navigation fold; the UI routes api-keys/models/deployments to the Providers screen accordingly.)
 Routing: strategy, priorities, weights, fallback, retries and route preview.
 Agent integrations: exact settings, copy controls, test and optional consent-based config edit.
 Logs: filters, correlation IDs and redaction.

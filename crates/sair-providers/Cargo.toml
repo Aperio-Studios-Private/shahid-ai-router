@@ -16,9 +16,13 @@ reqwest = { workspace = true }
 url = "2"
 futures-core = "0.3"
 bytes = "1"
+# Retry-After HTTP-date parsing (http.rs).
+chrono = { workspace = true }
+# spawn_blocking for the validating resolver (getaddrinfo must not block the
+# async runtime workers).
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 rustls = { workspace = true }
 wiremock = { workspace = true }
 

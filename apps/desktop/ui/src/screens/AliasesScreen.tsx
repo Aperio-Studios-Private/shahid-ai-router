@@ -18,8 +18,12 @@ export function AliasesScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const list = await invokeOr<Alias[]>("list_aliases", {});
-    if (list) setAliases(list);
+    try {
+      const list = await invokeOr<Alias[]>("list_aliases", {});
+      if (list) setAliases(list);
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   useEffect(() => {
@@ -77,8 +81,9 @@ export function AliasesScreen() {
                 e.preventDefault();
                 void run(async () => {
                   await invokeOr("bind_alias_deployment", {
-                    alias_id: a.id,
-                    deployment_id: bindTarget.deploymentId,
+                    // camelCase keys required by the Tauri bridge (audit P1 fix)
+                    aliasId: a.id,
+                    deploymentId: bindTarget.deploymentId,
                     priority: bindTarget.priority,
                   });
                   setBindTarget({ aliasId: "", deploymentId: "", priority: 10 });
@@ -88,6 +93,7 @@ export function AliasesScreen() {
               <input
                 required
                 placeholder="Deployment id"
+                aria-label={`Deployment id for alias ${a.alias}`}
                 value={bindTarget.aliasId === a.id ? bindTarget.deploymentId : ""}
                 onChange={(e) => setBindTarget({ ...bindTarget, aliasId: a.id, deploymentId: e.target.value })}
                 className="w-64 rounded border border-zinc-300 px-2 py-1 font-mono dark:border-zinc-700 dark:bg-zinc-900"

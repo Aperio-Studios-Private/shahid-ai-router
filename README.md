@@ -37,13 +37,26 @@ the current state, residuals, and owner actions.
 See [HANDOFF.md](HANDOFF.md) §5 for full setup. Short version:
 
 ```bash
-cargo test --workspace                 # 139 tests
+cargo test --workspace                 # 142 tests
 cd apps/desktop/ui && npm install && npm test && npm run build
 cd ../.. && cargo run -p shahid-ai-router
 ```
 
 The gateway autostarts on `127.0.0.1:8787` (loopback only, token-authenticated —
 reveal/copy the token in the app's Local Gateway screen).
+
+## NVIDIA NIM
+
+NVIDIA NIM works out of the box through the OpenAI-compatible provider type
+(see [docs/04](docs/04_PROVIDER_PROTOCOLS.md) § NVIDIA NIM):
+
+- **Hosted** (build.nvidia.com): add a provider with base URL
+  `https://integrate.api.nvidia.com/v1` (keep the `/v1`), type
+  `openai_compatible`, then a credential with your `nvapi-…` key. Add the
+  model (e.g. `meta/llama-3.1-8b-instruct`, family `openai_chat`), deploy it,
+  and bind an alias.
+- **Self-hosted NIM container**: base URL `http://<host>:8000/v1` and enable
+  "Allow loopback HTTP" for local targets.
 
 ## Layout
 

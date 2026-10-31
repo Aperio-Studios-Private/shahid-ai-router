@@ -18,8 +18,10 @@ Provider = upstream service. Credential = API key/token. Deployment = provider +
 ## Strategies
 Priority, round-robin, weighted, least-recently-used, latency-aware (with safeguards), and manual pin. Cost-aware routing only when current pricing and capability equivalence are verified.
 
+v1 status (ADR-018): priority / round_robin / weighted are implemented; lru and manual_pin return a structured 501 (`strategy_not_implemented`); latency-aware is deferred post-v1 (not declared in the v1 policy enum).
+
 ## Retry safety
-Respect Retry-After. Use bounded exponential backoff with jitter. Avoid retry storms. Do not retry invalid requests, unsupported models or context-limit errors blindly. Authentication failure may quarantine one credential. Account-level quota failure must not blindly rotate keys from the same shared account.
+Respect Retry-After. Use bounded exponential backoff with jitter. (v0 note, ADR-017: no in-request sleeping and no same-credential retry, so backoff/jitter are not applicable in v1 — rotation moves to the next candidate immediately.) Avoid retry storms. Do not retry invalid requests, unsupported models or context-limit errors blindly. Authentication failure may quarantine one credential. Account-level quota failure must not blindly rotate keys from the same shared account.
 
 ## Streaming
 After response events/bytes are committed, transparent failover is generally unsafe. Retry only before commitment or with explicit protocol/client resumability. Never concatenate unrelated model streams.

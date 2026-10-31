@@ -321,11 +321,22 @@ impl Repos<'_> {
         .bind(limit)
         .fetch_all(self.pool)
         .await?;
+        // Exclusion entries reference OTHER credentials (the ones skipped
+        // from the route snapshot), not the record's own credential — resolve
+        // each exclusion's id through a credential id→label map (audit P2
+        // fix: every exclusion previously showed the record's own label).
+        let labels: std::collections::HashMap<String, String> =
+            sqlx::query("SELECT id, label FROM credentials")
+                .fetch_all(self.pool)
+                .await?
+                .iter()
+                .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("label")))
+                .collect();
         Ok(rows
             .iter()
             .map(|r| {
                 // F-2: project exclusions server-side; replace credential
-                // ids with the joined label.
+                // ids with their labels.
                 let decision: Option<Value> = r
                     .try_get::<Option<String>, _>("decision_json")
                     .ok()
@@ -340,11 +351,15 @@ impl Repos<'_> {
                     .map(|a| {
                         a.iter()
                             .map(|e| {
+                                let credential = e
+                                    .get("credential_id")
+                                    .and_then(Value::as_str)
+                                    .map(|id| {
+                                        labels.get(id).cloned().unwrap_or_else(|| id.to_string())
+                                    });
                                 serde_json::json!({
                                     "deployment": e.get("deployment_id").cloned().unwrap_or(Value::Null),
-                                    "credential": credential_label.clone().unwrap_or_else(|| {
-                                        e.get("credential_id").and_then(Value::as_str).unwrap_or("?").to_string()
-                                    }),
+                                    "credential": credential.unwrap_or_else(|| "?".to_string()),
                                     "reason": e.get("reason").cloned().unwrap_or(Value::Null),
                                 })
                             })

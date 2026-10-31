@@ -182,7 +182,9 @@ pub async fn stage_import(db: &Db, payload: &Value) -> Result<Value, StageError>
     }
     report.insert("models".to_string(), json(added, skipped));
 
-    // Deployments (unique provider+model).
+    // Deployments (unique provider+model). Resolution uses the models-table
+    // NATURAL name carried in `model` (exports before the audit fix put the
+    // models-row PK in `model_id`, which never resolved — audit P1 fix).
     let mut added = 0u64;
     let mut skipped = 0u64;
     if let Some(items) = payload.get("deployments").and_then(Value::as_array) {
@@ -191,11 +193,16 @@ pub async fn stage_import(db: &Db, payload: &Value) -> Result<Value, StageError>
                 .get("provider_id")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            let model_name = item
+                .get("model")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("model_id").and_then(Value::as_str))
+                .unwrap_or("");
             let model_row_id: Option<String> = sqlx::query_scalar(
                 "SELECT id FROM models WHERE provider_id = ?1 AND model_id = ?2",
             )
             .bind(provider_id)
-            .bind(item.get("model_id").and_then(Value::as_str).unwrap_or(""))
+            .bind(model_name)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StageError::Staging(e.to_string()))?;
@@ -265,61 +272,176 @@ pub async fn stage_import(db: &Db, payload: &Value) -> Result<Value, StageError>
     }
     report.insert("routing_policies".to_string(), json(added, skipped));
 
-    // Aliases (natural key alias) + links to imported deployments by
-    // (provider name, model id) pairs carried in the link rows.
+    // Aliases (natural key alias) + bindings resolved by (provider name,
+    // model natural name). Alias rows are exported UNIQUE with a `bindings`
+    // array; bindings are processed on every row so multi-deployment aliases
+    // restore completely, duplicate-guarded against pre-existing aliases
+    // (UNIQUE(alias_id, deployment_id) would abort the transaction otherwise).
     let mut added = 0u64;
     let mut skipped = 0u64;
+    let mut seen_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Some(items) = payload.get("aliases").and_then(Value::as_array) {
         for item in items {
             let alias = item.get("alias").and_then(Value::as_str).unwrap_or("");
-            let exists: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM model_aliases WHERE alias = ?1")
+            if seen_aliases.contains(alias) {
+                skipped += 1;
+            } else {
+                seen_aliases.insert(alias.to_string());
+                let exists: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM model_aliases WHERE alias = ?1")
+                        .bind(alias)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(|e| StageError::Staging(e.to_string()))?;
+                if exists > 0 {
+                    skipped += 1;
+                } else {
+                    sqlx::query(
+                        "INSERT INTO model_aliases (id, alias, description, policy_id, created_at, updated_at)
+                         VALUES (lower(hex(randomblob(16))), ?1, ?2,
+                                 (SELECT id FROM routing_policies WHERE name = ?3),
+                                 datetime('now'), datetime('now'))",
+                    )
                     .bind(alias)
+                    .bind(item.get("description").and_then(Value::as_str))
+                    .bind(item.get("policy_name").and_then(Value::as_str))
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StageError::Staging(e.to_string()))?;
+                    added += 1;
+                }
+            }
+            // Bindings (also for pre-existing aliases; missing ones restored).
+            if let Some(bindings) = item.get("bindings").and_then(Value::as_array) {
+                for binding in bindings {
+                    let (Some(provider_name), Some(model_name)) = (
+                        binding.get("provider_name").and_then(Value::as_str),
+                        binding.get("model").and_then(Value::as_str),
+                    ) else {
+                        continue;
+                    };
+                    let priority = binding.get("priority").and_then(Value::as_i64).unwrap_or(0);
+                    let resolvable: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM deployments d
+                         JOIN models m ON m.id = d.model_id
+                         JOIN providers p ON p.id = d.provider_id
+                         WHERE p.name = ?1 AND m.model_id = ?2",
+                    )
+                    .bind(provider_name)
+                    .bind(model_name)
                     .fetch_one(&mut *tx)
                     .await
                     .map_err(|e| StageError::Staging(e.to_string()))?;
+                    if resolvable == 0 {
+                        continue;
+                    }
+                    let already: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM alias_deployments ad
+                         JOIN model_aliases ma ON ma.id = ad.alias_id
+                         JOIN deployments d ON d.id = ad.deployment_id
+                         JOIN models m ON m.id = d.model_id
+                         JOIN providers p ON p.id = d.provider_id
+                         WHERE ma.alias = ?1 AND p.name = ?2 AND m.model_id = ?3",
+                    )
+                    .bind(alias)
+                    .bind(provider_name)
+                    .bind(model_name)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| StageError::Staging(e.to_string()))?;
+                    if already > 0 {
+                        continue;
+                    }
+                    sqlx::query(
+                        "INSERT INTO alias_deployments (id, alias_id, deployment_id, priority)
+                         VALUES (lower(hex(randomblob(16))),
+                                 (SELECT id FROM model_aliases WHERE alias = ?1),
+                                 (SELECT d.id FROM deployments d JOIN models m ON m.id = d.model_id
+                                   JOIN providers p ON p.id = d.provider_id
+                                   WHERE p.name = ?2 AND m.model_id = ?3),
+                                 ?4)",
+                    )
+                    .bind(alias)
+                    .bind(provider_name)
+                    .bind(model_name)
+                    .bind(priority)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StageError::Staging(e.to_string()))?;
+                }
+            }
+        }
+    }
+    report.insert("aliases".to_string(), json(added, skipped));
+
+    // Agent profiles (natural key agent_id+endpoint). Alias names re-resolve
+    // to the freshly staged alias row ids; unresolvable names become NULL.
+    let mut added = 0u64;
+    let mut skipped = 0u64;
+    if let Some(items) = payload.get("agent_profiles").and_then(Value::as_array) {
+        for item in items {
+            let agent_id = item.get("agent_id").and_then(Value::as_str).unwrap_or("");
+            let endpoint = item.get("endpoint").and_then(Value::as_str).unwrap_or("");
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_profiles WHERE agent_id = ?1 AND endpoint = ?2",
+            )
+            .bind(agent_id)
+            .bind(endpoint)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StageError::Staging(e.to_string()))?;
             if exists > 0 {
                 skipped += 1;
                 continue;
             }
             sqlx::query(
-                "INSERT INTO model_aliases (id, alias, description, policy_id, created_at, updated_at)
-                 VALUES (lower(hex(randomblob(16))), ?1, ?2,
-                         (SELECT id FROM routing_policies WHERE name = ?3),
-                         datetime('now'), datetime('now'))",
+                "INSERT INTO agent_profiles (id, agent_id, agent_version, protocol_family, endpoint,
+                                             auth_method, model_alias, fast_alias, env_json,
+                                             config_rules_json, notes, created_at, updated_at)
+                 VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5,
+                         (SELECT id FROM model_aliases WHERE alias = ?6),
+                         (SELECT id FROM model_aliases WHERE alias = ?7),
+                         ?8, ?9, ?10, datetime('now'), datetime('now'))",
             )
-            .bind(alias)
-            .bind(item.get("description").and_then(Value::as_str))
-            .bind(item.get("policy_name").and_then(Value::as_str))
+            .bind(agent_id)
+            .bind(item.get("agent_version").and_then(Value::as_str))
+            .bind(item.get("protocol_family").and_then(Value::as_str).unwrap_or("openai_chat"))
+            .bind(endpoint)
+            .bind(item.get("auth_method").and_then(Value::as_str).unwrap_or("bearer"))
+            .bind(item.get("model_alias").and_then(Value::as_str))
+            .bind(item.get("fast_alias").and_then(Value::as_str))
+            .bind(item.get("env_json").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string()))
+            .bind(item.get("config_rules_json").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string()))
+            .bind(item.get("notes").and_then(Value::as_str))
             .execute(&mut *tx)
             .await
             .map_err(|e| StageError::Staging(e.to_string()))?;
-            if let (Some(provider_name), Some(model_id), Some(priority)) = (
-                item.get("provider_name").and_then(Value::as_str),
-                item.get("model_id").and_then(Value::as_str),
-                item.get("priority").and_then(Value::as_i64),
-            ) {
-                sqlx::query(
-                    "INSERT INTO alias_deployments (id, alias_id, deployment_id, priority)
-                     VALUES (lower(hex(randomblob(16))),
-                             (SELECT id FROM model_aliases WHERE alias = ?1),
-                             (SELECT d.id FROM deployments d JOIN models m ON m.id = d.model_id
-                               JOIN providers p ON p.id = d.provider_id
-                               WHERE p.name = ?2 AND m.model_id = ?3),
-                             ?4)",
-                )
-                .bind(alias)
-                .bind(provider_name)
-                .bind(model_id)
-                .bind(priority)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| StageError::Staging(e.to_string()))?;
-            }
             added += 1;
         }
     }
-    report.insert("aliases".to_string(), json(added, skipped));
+    report.insert("agent_profiles".to_string(), json(added, skipped));
+
+    // Settings: same 3-key allowlist as export (token refs can never appear).
+    // Stored as JSON text, matching get_setting/set_setting.
+    if let Some(settings) = payload.get("settings").and_then(Value::as_object) {
+        let mut added = 0u64;
+        for key in ["gateway", "retention_days", "openrouter_attribution"] {
+            let Some(value) = settings.get(key) else {
+                continue;
+            };
+            sqlx::query(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+            )
+            .bind(key)
+            .bind(value.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StageError::Staging(e.to_string()))?;
+            added += 1;
+        }
+        report.insert("settings".to_string(), json(added, 0));
+    }
 
     tx.commit()
         .await
