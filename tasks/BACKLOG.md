@@ -100,6 +100,15 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P10-T04 | Import (tx staging, natural-key conflicts, vault re-store, INCOMPLETE opt-out) | PASS |
 | P10-T05 | Gate (135 tests incl. crypto roundtrip/tamper/size) | PASS |
 
-## Phase 11 — Hardening/release (epic)
+## Phase 11 — Hardening/release (COMPLETE — see reports/phase-reports/phase-11.md)
 
-- Perf budget measurement, full security review pass, clean-install checklist, SBOM; signing requires human-provided certs (see BLOCKED.md when reached).
+| ID | Task | Status |
+|---|---|---|
+| P11-T01 | Plan + independent review (REVISE BEFORE IMPLEMENTATION; F-11-1/F-11-2 High resolved) | PASS |
+| P11-T02 | Deferred raw-TCP scenarios (stalled upstream, drain abort; mid-stream skeleton = residual) | PASS (partial — documented) |
+| P11-T03 | Paired-delta perf budget (< 25 ms advisory) | PASS |
+| P11-T04 | In-flight counter relocation (timeout-layer leak fix) + hyper-util graceful drain | PASS |
+| P11-T05 | SBOM (CycloneDX) + release checksum + release smoke | PASS |
+| P11-T06 | Final release claim: code-complete with residuals (owner waiver needed for BLOCKED items) | PASS |
+
+Perf budget measurement, full security review pass, clean-install checklist, SBOM; signing requires human-provided certs (see BLOCKED.md when reached).

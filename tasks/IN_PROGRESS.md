@@ -13,4 +13,5 @@
 - **Phase 8 (agent profiles) — COMPLETE, gate PASS** (reports/phase-reports/phase-8.md). Codex documented-unsupported (upstream removed chat wire API). 132 tests green.
 - **Phase 9 (UI completion) — COMPLETE, gate PASS** (reports/phase-reports/phase-9.md). Logs/Usage/Health screens, no-route recording, secret-safe projection. 132 tests green.
 - **Phase 10 (backup/restore) — COMPLETE, gate PASS** (reports/phase-reports/phase-10.md). Encrypted + config modes, natural-key conflicts, vault re-store. 135 tests green.
-- Next: Phase 11 entry (hardening/release) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).
+- **Phase 11 (hardening/release) — COMPLETE, gate PASS with residuals** (reports/phase-reports/phase-11.md). All 11 roadmap phases delivered. Release claim: code-complete with residuals (BLOCKED items need owner waiver per docs/11).
+- NEXT: owner actions (B-01 billing, macOS verification, signing) — all development phases are complete. — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).

@@ -28,6 +28,6 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 | FR-020 | Retention 30d | 3 | P2-T01 + P2-T03 | reports/phase-reports/phase-2.md | Implemented (purge + startup/daily task, tested) |
 | FR-021 | Upstream concurrency bound | 4 | P4 (deployment semaphores) | reports/phase-reports/phase-4.md | Implemented |
 | FR-022 | Lifecycle transparency | 1 | P2-T03 (UI gateway state) | reports/phase-reports/phase-2.md | Implemented (state + errors surfaced) |
-| FR-023 | Routing scope/agent constraints | 3+ | P3-T03, Phase 8 | TBD | Planned |
+| FR-023 | Routing scope/agent constraints | 3+ | P3-T03 + P6 (count_tokens) + P8 (Codex unsupported — ADR-010 amended) | reports/phase-reports/phase-6.md, phase-8.md | Implemented |
 
 NFR evidence: security (P2 gates), performance budget (Phase 11), a11y (Phase 9), cross-platform (ADR-013 CI matrix).
