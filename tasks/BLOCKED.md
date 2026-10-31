@@ -1,8 +1,6 @@
 # Blocked
 
-## B-01 — CI execution blocked by GitHub Actions billing (2026-10-31)
-- **Status:** BLOCKED (external, owner action required).
-- **Evidence:** All three jobs of run 41111412160 failed at startup with the annotation: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings" (org: Aperio-Studios-Private, free plan, private repo).
-- **Impact:** No CI evidence can be produced until billing is resolved. The identical commands (fmt, clippy `-D warnings`, cargo test, tsc, vitest, vite build) are verified locally on Windows and recorded in phase reports. macOS runtime evidence (ADR-016 vault tests) is deferred until CI runs or the owner's 2026-11-01 interactive verification.
-- **Unblock:** Owner fixes billing / raises the Actions spending limit (or makes the repo public). Then re-run: `gh run rerun 41111412160` or push.
-- **Owner:** aperiostudios8 (human). Not resolvable by the agent; not self-waivable.
+## B-01 — CI execution blocked by GitHub Actions billing (2026-10-31) — RESOLVED
+- **Was:** BLOCKED (external, owner action required). All jobs of run 41111412160 failed at startup on the private repo: "The job was not started because recent account payments have failed or your spending limit needs to be increased" (org: Aperio-Studios-Private, free plan, private repo). Post-fix pushes 41192376264 / 41192585496 hit the same wall while the repo was still private.
+- **Resolution (2026-10-31):** the repository was made PUBLIC (owner decision; pre-publication audit clean — full-history secrets scan, SBOM regeneration on the current machine, planning-audit path redaction). Public repositories receive free GitHub Actions minutes. Run **41192654780** (first push after the visibility change) was queued and executed — the pipeline (Rust matrix windows/macos: fmt / clippy `-D warnings` / tests / build + frontend typecheck/vitest/vite build + the Phase-11 security audit job) is producing its first real CI evidence. See the next phase report for the run link and results.
+- **Follow-ups (owner):** rebuild the Windows release binary + checksum before any release tag; signing/notarization certificates; clean-VM install check. Interactive macOS full-app verification remains open (vault layer now proven on macOS — 8/8 Keychain contract tests, `reports/phase-reports/audit-fixes.md`).
