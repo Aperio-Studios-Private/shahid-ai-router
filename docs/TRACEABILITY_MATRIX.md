@@ -19,7 +19,7 @@ Statuses: Planned | In progress | Implemented (evidence ref) | Verified (indepen
 | FR-011 | Request history | 3 | P3-T04 + P9 (projection + UI; streamed tokens NULL — Phase 7 residual) | reports/phase-reports/phase-9.md | Implemented |
 | FR-012 | Health diagnostics | 4+ | P3/P4 + P9 (Health Monitor with explanations, log exclusions) | reports/phase-reports/phase-9.md | Implemented |
 | FR-013 | Agent profiles | 8 | P8 (generators + consent-gated apply) | reports/phase-reports/phase-8.md | Implemented (Codex unsupported by upstream — documented; live CLI verification pending) |
-| FR-014 | Backup/restore | 10 | Phase 10 epic | TBD | Planned |
+| FR-014 | Backup/restore | 10 | P10 (.sair config+encrypted) | reports/phase-reports/phase-10.md | Implemented (macOS CI restore evidence pending B-01) |
 | FR-015 | Lifecycle | 1+ | P1-T04 (skeleton), P2-T03 | reports/phase-reports/phase-2.md | Implemented (start/stop/drain/exit hook) |
 | FR-016 | Redacted diagnostics | 2+ | P2-T04 | reports/phase-reports/phase-2.md | Implemented (redaction + sweep tests) |
 | FR-017 | Graceful drain | 3 | P2-T03 | reports/phase-reports/phase-2.md | Implemented (drain + exit hook, tested) |

@@ -12,4 +12,5 @@
 - **Phase 7 (streaming) — COMPLETE, gate PASS** (reports/phase-reports/phase-7.md). 123 tests green.
 - **Phase 8 (agent profiles) — COMPLETE, gate PASS** (reports/phase-reports/phase-8.md). Codex documented-unsupported (upstream removed chat wire API). 132 tests green.
 - **Phase 9 (UI completion) — COMPLETE, gate PASS** (reports/phase-reports/phase-9.md). Logs/Usage/Health screens, no-route recording, secret-safe projection. 132 tests green.
-- Next: Phase 10 entry (backup/restore) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).
+- **Phase 10 (backup/restore) — COMPLETE, gate PASS** (reports/phase-reports/phase-10.md). Encrypted + config modes, natural-key conflicts, vault re-store. 135 tests green.
+- Next: Phase 11 entry (hardening/release) — requires plan + independent review per `.agent/WORKFLOW_RULES.md`. P3 watch item: adapters receive only `SsrfCheckedClient` (ADR-015).

@@ -90,9 +90,15 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P9-T02 | Records projection (secret-safe) + usage aggregates + no-route recording | PASS |
 | P9-T03 | Logs/Usage/Health screens + a11y (focus rings, aria, manual checklist) | PASS |
 
-## Phase 10 — Backup/restore (epic)
+## Phase 10 — Backup/restore (COMPLETE — see reports/phase-reports/phase-10.md)
 
-- `.sair` config-only + encrypted full (ADR-007), import validation pipeline, INCOMPLETE credential states (R-8), cross-platform restore tests.
+| ID | Task | Status |
+|---|---|---|
+| P10-T01 | Plan + independent review (AMEND BEFORE IMPLEMENTATION; F-1/F-2 High + 8 resolved) | PASS |
+| P10-T02 | Envelope + crypto (Argon2id + AES-256-GCM, AAD struct, integrity) | PASS |
+| P10-T03 | Export (config allowlist / encrypted with vault secrets) | PASS |
+| P10-T04 | Import (tx staging, natural-key conflicts, vault re-store, INCOMPLETE opt-out) | PASS |
+| P10-T05 | Gate (135 tests incl. crypto roundtrip/tamper/size) | PASS |
 
 ## Phase 11 — Hardening/release (epic)
 
