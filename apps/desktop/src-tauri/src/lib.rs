@@ -6,6 +6,8 @@
 //! gateway is drained within a grace period (FR-017; the `RunEvent::Exit`
 //! hook is the drain caller named by review finding F-9).
 
+mod backup;
+mod backup_import;
 mod commands;
 mod commands_management;
 mod commands_rotation;
@@ -72,6 +74,9 @@ pub fn run() {
             commands_rotation::apply_agent_profile,
             commands_rotation::list_request_records,
             commands_rotation::usage_summary,
+            commands_rotation::export_backup,
+            commands_rotation::preview_backup,
+            commands_rotation::commit_backup,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

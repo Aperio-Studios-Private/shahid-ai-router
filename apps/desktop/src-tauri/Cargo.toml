@@ -27,6 +27,11 @@ tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 rustls = { workspace = true }
 ring = { workspace = true }
+thiserror = { workspace = true }
+argon2 = "0.6"
+aes-gcm = "0.11"
+base64 = { workspace = true }
+sqlx = { workspace = true }
 chrono = { workspace = true }
 dirs = "5"
 tempfile = "3"
