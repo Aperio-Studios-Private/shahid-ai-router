@@ -7,7 +7,7 @@ Auditor: orchestrator agent. Date: 2026-10-30. Inputs: all `docs/`, all `.agent/
 ## 1. Repository state
 
 - Documentation-only pack; **no application source exists**. 33 files: 15 docs, 8 agent protocols, 4 empty task boards, manifest/README/LICENSE/CHANGELOG.
-- The enclosing git repository is the user's **home directory** (`C:/Users/nacht`), containing unrelated commits (a separate Letzer project). The pack README says "Extract it into the root of a new repository."
+- The working pack was extracted outside a git repository (local path redacted before publication; it referenced the pack author's home directory and an unrelated private project). The pack README says "Extract it into the root of a new repository."
   - **Decision:** the pack folder `...\Shahid-AI-Router-Documentation-Pack\Shahid-AI-Router-Documentation-Pack\` becomes the new project repo root; a fresh `git init` will be created there (nested repos are ignored by the outer repo). The home-directory repo will never be committed to.
 
 ## 2. PRD audit (docs/01)

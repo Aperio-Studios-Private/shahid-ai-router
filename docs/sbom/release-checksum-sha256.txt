@@ -1,1 +1,10 @@
+# Release binary checksums (SHA-256)
+#
+# 2026-10-31 — macOS arm64 rebuild after the audit-fix commit 398d58d
+# (142 workspace tests, clippy -D warnings, fmt, tsc/vitest/vite build all green;
+#  includes every audit fix — the earlier Windows binary below predates them
+#  and must be rebuilt by the owner before any release tag).
+bd8d1b613f59f9a11adecd73a46ec3f92be79b59f38beb1b8f6aec0d2db02319  target/release/shahid-ai-router (macOS arm64, 17.67 MB, 2026-10-31)
+
+# 2026-10-30 — Windows x64 (PRE-AUDIT — stale, rebuild before release)
 40969156181b5a3e7451ee2b2d0955803b2d3c877959c3688e36c344a7356148 *target/release/shahid-ai-router.exe

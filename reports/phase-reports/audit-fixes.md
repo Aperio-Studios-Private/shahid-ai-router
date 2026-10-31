@@ -70,6 +70,26 @@ summarized in `CHANGELOG.md` [Unreleased].
 - ADR-018/latency-aware: documented as post-v1 in docs/05 (no 501 contract added — schema CHECK
   constrains strategy values; changing it would need a table-rebuild migration, judged not worth the risk pre-release).
 
+## macOS vault verification (ADR-016 partial close, 2026-10-31)
+
+`cargo test -p sair-vault --features os` against the **real macOS Keychain**: 8/8 passed, including
+`os_store_passes_contract` (store/retrieve/delete roundtrip via keyring 4.2 apple-native store),
+`availability_probe_returns`, and the malformed-ref rejection test. Keychain residue check after the
+run: zero `shahid-ai-router-tests` entries remain (`security find-generic-password` / dump-keychain
+both negative). This is the first runtime macOS vault evidence — the interactive owner verification
+(full app run + encrypted restore) remains open but the vault layer itself is now proven on macOS.
+
+## Release artifacts (2026-10-31)
+
+- Release binary rebuilt on macOS arm64: `target/release/shahid-ai-router` (17.67 MB, 2m49s build),
+  SHA-256 `bd8d1b61…db02319` recorded in `docs/sbom/release-checksum-sha256.txt` (the pre-audit
+  Windows checksum is retained but marked STALE — rebuild required before tagging).
+- All 7 CycloneDX SBOMs regenerated on the current machine (`cargo cyclonedx --all --format json`):
+  the developer-machine paths and wrong target triple from the original pack are gone; `docs/sbom/`
+  copies refreshed. SBOMs now reflect the macOS build dependency graph.
+- One environment note in `audits/planning/planning-audit.md` redacted (local username/path and an
+  unrelated project name) ahead of repository publication; annotation marks the redaction.
+
 ## Environment note
 
 This verification ran on macOS with a fresh rustup stable toolchain. The Windows release binary and
