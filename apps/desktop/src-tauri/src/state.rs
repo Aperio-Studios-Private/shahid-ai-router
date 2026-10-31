@@ -29,12 +29,35 @@ pub struct AppState {
     gateway: RwLock<Option<GatewayHandle>>,
     gateway_error: RwLock<Option<String>>,
     token_ref: RwLock<Option<SecretRef>>,
+    // Cloud auto-backup schedule state (Phase 12). Short critical sections,
+    // never held across an await.
+    cloud_dirty: std::sync::atomic::AtomicBool,
+    cloud_last_upload: std::sync::Mutex<Option<std::time::Instant>>,
+    cloud_last_change: std::sync::Mutex<Option<std::time::Instant>>,
+    cloud_last_error: std::sync::Mutex<Option<String>>,
+    cloud_last_upload_at: std::sync::Mutex<Option<String>>,
+    /// Temp file staged by `cloud_restore` for the (unchanged) path-keyed
+    /// preview/commit pair, plus the previewed mode.
+    cloud_restore_stage: std::sync::Mutex<Option<(std::path::PathBuf, String)>>,
+    /// App-data temp directory for cloud restores (set once at startup).
+    cloud_tmp_dir_cached: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 pub const SETTING_GATEWAY_TOKEN_REF: &str = "gateway_token_ref";
 pub const SETTING_GATEWAY: &str = "gateway";
 pub const SETTING_RETENTION_DAYS: &str = "retention_days";
 pub const DEFAULT_RETENTION_DAYS: i64 = 30;
+// Cloud backup (Phase 12, ADR-019). INVARIANT (review F-12-8): none of these
+// keys may ever join the backup-export allowlist in backup.rs — asserted by
+// `cloud_settings_never_exported`.
+pub const SETTING_CLOUD_PROVIDER: &str = "cloud_provider";
+pub const SETTING_CLOUD_MODE: &str = "cloud_mode";
+pub const SETTING_CLOUD_SCHEDULE: &str = "cloud_schedule_enabled";
+pub const SETTING_CLOUD_DSN_REF: &str = "cloud_dsn_ref";
+pub const SETTING_CLOUD_KEY_REF: &str = "cloud_key_ref";
+pub const SETTING_CLOUD_PASSPHRASE_REF: &str = "cloud_passphrase_ref";
+pub const SETTING_CLOUD_DEVICE_ID: &str = "cloud_device_id";
+pub const CLOUD_PRUNE_KEEP: usize = 10;
 
 impl AppState {
     pub fn new(db: Db, vault: Arc<dyn SecretStore>) -> Self {
@@ -44,7 +67,23 @@ impl AppState {
             gateway: RwLock::new(None),
             gateway_error: RwLock::new(None),
             token_ref: RwLock::new(None),
+            cloud_dirty: std::sync::atomic::AtomicBool::new(false),
+            cloud_last_upload: std::sync::Mutex::new(None),
+            cloud_last_change: std::sync::Mutex::new(None),
+            cloud_last_error: std::sync::Mutex::new(None),
+            cloud_last_upload_at: std::sync::Mutex::new(None),
+            cloud_restore_stage: std::sync::Mutex::new(None),
+            cloud_tmp_dir_cached: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Marks the configuration mutated so the cloud scheduler uploads the
+    /// next quiet window (Phase 12). Call from every mutating management
+    /// command (enumerated in the phase-12 plan §3.3).
+    pub fn mark_cloud_dirty(&self) {
+        self.cloud_dirty
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.cloud_last_change.lock().unwrap() = Some(std::time::Instant::now());
     }
 
     /// Gateway state snapshot for IPC/UI. Never includes the token.
@@ -312,4 +351,407 @@ pub async fn purge_expired_records(db: &Db) {
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "retention purge failed"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud auto-backup (Phase 12, ADR-019) — config accessors, schedule decision,
+// and the upload routine. Vault reads/writes and the envelope build run via
+// spawn_blocking (SecretStore is sync; Argon2 is CPU-bound — review F-12-3).
+// Failures never panic or block the app: they surface as status + warn logs.
+// ---------------------------------------------------------------------------
+
+/// Resolved cloud configuration. Secret material is resolved from the vault
+/// on demand and never logged.
+#[derive(Debug, Clone, Default)]
+pub struct CloudConfig {
+    pub provider: Option<String>,
+    pub mode: Option<String>,
+    pub schedule_enabled: bool,
+    pub device_id: String,
+    pub dsn: Option<Zeroizing<String>>,
+    pub key: Option<Zeroizing<String>>,
+    pub passphrase: Option<Zeroizing<String>>,
+    pub has_dsn: bool,
+    pub has_passphrase: bool,
+}
+
+impl AppState {
+    /// Stable per-install device label (no PII beyond a random/hash label).
+    pub async fn cloud_device_id(&self) -> Result<String, String> {
+        if let Some(id) = self
+            .db
+            .get_setting(SETTING_CLOUD_DEVICE_ID)
+            .await
+            .map_err(|e| format!("db unavailable: {e}"))?
+            .and_then(|v| v.as_str().map(str::to_string))
+        {
+            return Ok(id);
+        }
+        let hostname = hostname().unwrap_or_else(|| "device".to_string());
+        let id = crate::cloud_backup::sha256_hex(format!("sair-device:{hostname}").as_bytes())
+            [..16]
+            .to_string()
+            + "-"
+            + &crate::cloud_backup::sha256_hex(
+                chrono::Utc::now()
+                    .timestamp_nanos_opt()
+                    .unwrap_or_default()
+                    .to_le_bytes()
+                    .as_slice(),
+            )[..4];
+        self.db
+            .set_setting(SETTING_CLOUD_DEVICE_ID, &serde_json::json!(id))
+            .await
+            .map_err(|e| format!("db unavailable: {e}"))?;
+        Ok(id)
+    }
+
+    pub(crate) async fn vault_store(&self, value: &str) -> Result<String, String> {
+        let vault = self.vault.clone();
+        let bytes = Zeroizing::new(value.as_bytes().to_vec());
+        tauri::async_runtime::spawn_blocking(move || {
+            vault
+                .store(bytes.as_slice())
+                .map(|r| r.as_str().to_string())
+                .map_err(|e| format!("vault unavailable: {e}"))
+        })
+        .await
+        .map_err(|e| format!("vault task failed: {e}"))?
+    }
+
+    pub(crate) async fn vault_retrieve(
+        &self,
+        secret_ref: &SecretRef,
+    ) -> Result<Zeroizing<String>, String> {
+        let vault = self.vault.clone();
+        let secret_ref = secret_ref.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            vault
+                .retrieve(&secret_ref)
+                .map(|bytes| Zeroizing::new(String::from_utf8_lossy(&bytes).to_string()))
+                .map_err(|e| format!("vault unavailable: {e}"))
+        })
+        .await
+        .map_err(|e| format!("vault task failed: {e}"))?
+    }
+
+    /// Reads the cloud configuration; resolves vault refs only when asked.
+    pub async fn cloud_config(&self, resolve_secrets: bool) -> Result<CloudConfig, String> {
+        let get = |k: &str| {
+            let db = self.db.clone();
+            let k = k.to_string();
+            async move {
+                match db.get_setting(&k).await {
+                    Ok(v) => Ok(v.and_then(|v| v.as_str().map(str::to_string))),
+                    Err(e) => Err(format!("db unavailable: {e}")),
+                }
+            }
+        };
+        let provider = get(SETTING_CLOUD_PROVIDER).await?;
+        let mode = get(SETTING_CLOUD_MODE).await?;
+        let schedule_enabled = get(SETTING_CLOUD_SCHEDULE)
+            .await?
+            .map(|s| s == "true")
+            .unwrap_or(false);
+        let device_id = self.cloud_device_id().await?;
+        let dsn_ref = get(SETTING_CLOUD_DSN_REF).await?;
+        let key_ref = get(SETTING_CLOUD_KEY_REF).await?;
+        let passphrase_ref = get(SETTING_CLOUD_PASSPHRASE_REF).await?;
+        let mut config = CloudConfig {
+            provider,
+            mode,
+            schedule_enabled,
+            device_id,
+            has_dsn: dsn_ref.is_some(),
+            has_passphrase: passphrase_ref.is_some(),
+            ..CloudConfig::default()
+        };
+        if resolve_secrets {
+            if let Some(raw) = dsn_ref
+                && let Ok(secret_ref) = SecretRef::parse(&raw)
+            {
+                config.dsn = Some(self.vault_retrieve(&secret_ref).await?);
+            }
+            if let Some(raw) = key_ref
+                && let Ok(secret_ref) = SecretRef::parse(&raw)
+            {
+                config.key = Some(self.vault_retrieve(&secret_ref).await?);
+            }
+            if let Some(raw) = passphrase_ref
+                && let Ok(secret_ref) = SecretRef::parse(&raw)
+            {
+                config.passphrase = Some(self.vault_retrieve(&secret_ref).await?);
+            }
+        }
+        Ok(config)
+    }
+
+    /// Builds the configured provider instance (Neon v1; Supabase supported).
+    pub async fn cloud_provider(
+        &self,
+    ) -> Result<Arc<dyn crate::cloud_backup::CloudBackupProvider>, String> {
+        let config = self.cloud_config(true).await?;
+        let Some(provider) = config.provider.as_deref() else {
+            return Err("cloud backup is not configured".to_string());
+        };
+        match provider {
+            "neon" => {
+                let dsn = config
+                    .dsn
+                    .as_ref()
+                    .ok_or_else(|| "cloud connection string missing from vault".to_string())?;
+                Ok(Arc::new(crate::cloud_backup::NeonProvider::new(
+                    dsn.as_str(),
+                )?))
+            }
+            "supabase" => {
+                let key = config
+                    .key
+                    .as_ref()
+                    .ok_or_else(|| "supabase API key missing from vault".to_string())?;
+                let dsn = config
+                    .dsn
+                    .as_ref()
+                    .ok_or_else(|| "supabase project URL missing from vault".to_string())?;
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("client build failed: {e}"))?;
+                Ok(Arc::new(crate::cloud_backup::SupabaseProvider::new(
+                    dsn.as_str(),
+                    key.as_str(),
+                    client,
+                )?))
+            }
+            other => Err(format!("unknown cloud provider: {other}")),
+        }
+    }
+
+    /// Scheduler tick decision: pure predicate + stored Instants.
+    pub async fn cloud_due_now(&self) -> bool {
+        let (schedule_enabled, dirty, since_upload, since_change) = {
+            let last_upload = *self.cloud_last_upload.lock().unwrap();
+            let last_change = *self.cloud_last_change.lock().unwrap();
+            let now = std::time::Instant::now();
+            let since_upload = last_upload.map(|t| now - t);
+            let since_change = last_change.map(|t| now - t);
+            let dirty = self.cloud_dirty.load(std::sync::atomic::Ordering::SeqCst);
+            let schedule_enabled = self
+                .db
+                .get_setting(SETTING_CLOUD_SCHEDULE)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .map(|s| s == "true")
+                .unwrap_or(false);
+            (schedule_enabled, dirty, since_upload, since_change)
+        };
+        crate::cloud_backup::should_upload(schedule_enabled, dirty, since_upload, since_change)
+    }
+
+    /// Builds the envelope for the configured mode and uploads it; prunes to
+    /// [`CLOUD_PRUNE_KEEP`]. Returns the upload summary.
+    ///
+    /// # Errors
+    /// Configuration, vault, DB, crypto, or transport failures (all mapped to
+    /// safe strings; the DSN never appears — see `cloud_backup`).
+    pub async fn cloud_run_upload(&self, force: bool) -> Result<serde_json::Value, String> {
+        match self.cloud_run_upload_inner(force).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                *self.cloud_last_error.lock().unwrap() = Some(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    async fn cloud_run_upload_inner(&self, force: bool) -> Result<serde_json::Value, String> {
+        let config = self.cloud_config(true).await?;
+        let Some(provider_name) = config.provider.clone() else {
+            /* used in the log below */
+            return Err("cloud backup is not configured".to_string());
+        };
+        if !force && !config.schedule_enabled {
+            return Err("cloud schedule is disabled".to_string());
+        }
+        let provider = self.cloud_provider().await?;
+        let mode = config
+            .mode
+            .clone()
+            .unwrap_or_else(|| "encrypted".to_string());
+        let passphrase = if mode == "encrypted" {
+            Some(
+                config
+                    .passphrase
+                    .as_ref()
+                    .ok_or_else(|| "backup passphrase missing from vault".to_string())?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        let envelope = crate::cloud_backup::build_upload_envelope(
+            &self.db,
+            self.vault.as_ref(),
+            &mode,
+            passphrase,
+        )
+        .await?;
+        let device = config.device_id.clone();
+        let sha = envelope.sha256.clone();
+        let json = envelope.json.clone();
+        let env_mode = envelope.mode.clone();
+        let json_len = json.len();
+        provider
+            .upload(json, sha.clone(), device.clone(), env_mode.clone())
+            .await?;
+        let pruned = provider
+            .prune(device.clone(), CLOUD_PRUNE_KEEP)
+            .await
+            .unwrap_or(0);
+        *self.cloud_last_upload.lock().unwrap() = Some(std::time::Instant::now());
+        *self.cloud_last_upload_at.lock().unwrap() = Some(chrono::Utc::now().to_rfc3339());
+        self.cloud_dirty
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *self.cloud_last_error.lock().unwrap() = None;
+        tracing::info!(provider = %provider_name, mode = %env_mode, bytes = json_len, pruned, "cloud backup uploaded");
+        Ok(serde_json::json!({
+            "mode": env_mode,
+            "bytes": json_len,
+            "sha256": sha,
+            "device_id": device,
+            "pruned": pruned,
+        }))
+    }
+
+    /// Stages a downloaded snapshot for the unchanged path-keyed
+    /// preview/commit flow and returns (temp_path, mode).
+    pub async fn cloud_stage_download(
+        &self,
+        snapshot_id: &str,
+        passphrase: Option<String>,
+    ) -> Result<(std::path::PathBuf, String), String> {
+        let provider = self.cloud_provider().await?;
+        let payload = provider.download(snapshot_id.to_string()).await?;
+        // Validate with the existing parser (size cap + structure + config
+        // integrity) BEFORE anything touches disk or the held slot.
+        let envelope = crate::backup::parse_envelope(payload.as_bytes())
+            .map_err(|e| format!("snapshot is not a valid backup: {e}"))?;
+        if envelope.mode == "encrypted" {
+            // The preview step needs the passphrase; fall back to the vault
+            // (same-device re-restore) before failing.
+            if passphrase.is_none() {
+                let config = self.cloud_config(true).await?;
+                if config.passphrase.is_none() {
+                    return Err(
+                        "this snapshot is encrypted — enter its backup passphrase".to_string()
+                    );
+                }
+            }
+        }
+        let dir = self
+            .cloud_tmp_dir()
+            .await
+            .ok_or_else(|| "cannot resolve app data dir".to_string())?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| format!("mkdir failed: {e}"))?;
+        let safe_id: String = snapshot_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.')
+            .collect();
+        let path = dir.join(format!("cloud-{safe_id}.sair"));
+        tokio::fs::write(&path, payload.as_bytes())
+            .await
+            .map_err(|e| format!("temp write failed: {e}"))?;
+        *self.cloud_restore_stage.lock().unwrap() = Some((path.clone(), envelope.mode.clone()));
+        Ok((path, envelope.mode))
+    }
+
+    pub fn cloud_take_staged(&self) -> Option<(std::path::PathBuf, String)> {
+        self.cloud_restore_stage.lock().unwrap().clone()
+    }
+
+    pub fn cloud_clear_staged(&self, path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        *self.cloud_restore_stage.lock().unwrap() = None;
+    }
+
+    /// Last successful upload time (RFC-3339), for the UI status.
+    pub fn cloud_last_upload_at(&self) -> Option<String> {
+        self.cloud_last_upload_at.lock().unwrap().clone()
+    }
+
+    /// Last cloud failure (already DSN-free), for the UI status.
+    pub fn cloud_last_error(&self) -> Option<String> {
+        self.cloud_last_error.lock().unwrap().clone()
+    }
+
+    pub fn cloud_is_dirty(&self) -> bool {
+        self.cloud_dirty.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Deletes the cloud vault items (connection string / key / passphrase)
+    /// best-effort on disable. Blocking OS calls — spawn_blocking.
+    pub async fn cloud_forget_secrets(&self) {
+        for key in [
+            SETTING_CLOUD_DSN_REF,
+            SETTING_CLOUD_KEY_REF,
+            SETTING_CLOUD_PASSPHRASE_REF,
+        ] {
+            let raw = self
+                .db
+                .get_setting(key)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(str::to_string));
+            if let Some(raw) = raw
+                && let Ok(secret_ref) = SecretRef::parse(&raw)
+            {
+                let vault = self.vault.clone();
+                let label = key.to_string();
+                let result =
+                    tauri::async_runtime::spawn_blocking(move || vault.delete(&secret_ref))
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.map_err(|e| e.to_string()));
+                if let Err(e) = result {
+                    tracing::warn!(key = %label, error = %e, "could not delete cloud vault item");
+                }
+            }
+        }
+    }
+
+    async fn cloud_tmp_dir(&self) -> Option<std::path::PathBuf> {
+        // Reuse the DB directory: app_data is already resolved for the DB in
+        // lib.rs; the Db handle does not carry the path, so resolve via the
+        // DB file convention by asking the caller (set once at startup).
+        self.cloud_tmp_dir_cached.lock().unwrap().clone()
+    }
+}
+
+impl AppState {
+    pub fn set_cloud_tmp_dir(&self, dir: std::path::PathBuf) {
+        *self.cloud_tmp_dir_cached.lock().unwrap() = Some(dir);
+    }
+}
+
+fn hostname() -> Option<String> {
+    hostname_impl()
+}
+
+#[cfg(target_os = "macos")]
+fn hostname_impl() -> Option<String> {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hostname_impl() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
 }

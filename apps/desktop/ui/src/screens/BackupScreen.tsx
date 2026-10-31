@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { invokeOr } from "../lib/tauri";
+import { CloudBackupSection } from "./CloudBackupSection";
 
 interface ExportResult {
   path: string;
@@ -234,6 +235,8 @@ export function BackupScreen() {
           </button>
         </div>
       )}
+
+      <CloudBackupSection />
     </section>
   );
 }

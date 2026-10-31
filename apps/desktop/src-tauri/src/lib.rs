@@ -8,7 +8,9 @@
 
 mod backup;
 mod backup_import;
+mod cloud_backup;
 mod commands;
+mod commands_cloud;
 mod commands_management;
 mod commands_rotation;
 mod profile_apply;
@@ -77,6 +79,14 @@ pub fn run() {
             commands_rotation::export_backup,
             commands_rotation::preview_backup,
             commands_rotation::commit_backup,
+            commands_cloud::cloud_configure,
+            commands_cloud::cloud_test,
+            commands_cloud::cloud_status,
+            commands_cloud::cloud_list,
+            commands_cloud::cloud_backup_now,
+            commands_cloud::cloud_restore,
+            commands_cloud::cloud_commit,
+            commands_cloud::cloud_disable,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -135,6 +145,37 @@ async fn init_backend(app: tauri::AppHandle) -> Result<(), String> {
     });
 
     app.manage(AppState::new(db, Arc::new(OsSecretStore::new())));
+
+    // Cloud restore staging dir + startup sweep of stale temp files (they are
+    // deleted on commit/cancel, but a crash can leave them).
+    let state = app.state::<AppState>();
+    let tmp_dir = data_dir.join("tmp");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    state.set_cloud_tmp_dir(tmp_dir.clone());
+    if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "sair") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    // Cloud auto-backup scheduler (Phase 12): 60 s tick evaluating the plan's
+    // daily/on-change rules; spawned AFTER app.manage so it can reach
+    // AppState (review F-12-4). Failures warn and retry — never fatal.
+    let cloud_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let state = cloud_app.state::<AppState>();
+            if !state.cloud_due_now().await {
+                continue;
+            }
+            if let Err(err) = state.cloud_run_upload(false).await {
+                tracing::warn!(error = %err, "cloud auto-backup failed (will retry)");
+            }
+        }
+    });
 
     // Ensure the token exists and start the gateway. Failures leave the
     // gateway stopped with an explicit, UI-visible error state (degraded

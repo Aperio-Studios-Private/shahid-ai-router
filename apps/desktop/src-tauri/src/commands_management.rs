@@ -53,6 +53,9 @@ pub async fn add_provider(
     allow_loopback: bool,
     notes: Option<String>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -75,6 +78,9 @@ pub async fn update_provider(
     allow_loopback: bool,
     notes: Option<String>,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -89,6 +95,9 @@ pub async fn set_provider_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -99,6 +108,9 @@ pub async fn set_provider_enabled(
 
 #[tauri::command]
 pub async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -199,6 +211,9 @@ pub async fn add_credential(
     priority: i64,
     weight: i64,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     let secret_ref = state
         .vault
         .store(secret.as_bytes())
@@ -221,6 +236,9 @@ pub async fn set_credential_status(
     id: String,
     status: String,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -236,6 +254,9 @@ pub async fn delete_credential(
     provider_id: String,
     id: String,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     let repos = state.db.repos();
     let credentials = repos
         .list_credentials(&provider_id)
@@ -297,6 +318,9 @@ pub async fn add_model(
     structured_output: bool,
     context_window: Option<i64>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     let capabilities = json!({
         "streaming": streaming,
         "tool_calling": tool_calling,
@@ -325,6 +349,9 @@ pub async fn add_deployment(
     model_pk: String,
     endpoint_override: Option<String>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -339,6 +366,9 @@ pub async fn set_deployment_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -349,6 +379,9 @@ pub async fn set_deployment_enabled(
 
 #[tauri::command]
 pub async fn delete_deployment(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -394,6 +427,9 @@ pub async fn add_alias(
     alias: String,
     description: Option<String>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -409,6 +445,9 @@ pub async fn bind_alias_deployment(
     deployment_id: String,
     priority: i64,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -419,6 +458,9 @@ pub async fn bind_alias_deployment(
 
 #[tauri::command]
 pub async fn delete_alias(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -440,6 +482,9 @@ pub async fn update_model_capabilities(
     structured_output: bool,
     context_window: Option<i64>,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     let capabilities = json!({
         "streaming": streaming,
         "tool_calling": tool_calling,

@@ -57,3 +57,20 @@ NVIDIA NIM exposes an OpenAI-compatible API, so it works through the generic
 - Streaming (`streamGenerateContent`-free, plain OpenAI SSE) and non-streaming
   calls route like any OpenAI-compatible deployment; usage tokens are
   extracted from the standard `usage` block.
+
+## Cloud backup table (Phase 12, ADR-019)
+
+Run once in your Neon/Supabase SQL editor:
+
+```sql
+create table if not exists sair_backups (
+  id          text primary key,
+  device_id   text not null,
+  app_version text not null,
+  mode        text not null check (mode in ('encrypted','config')),
+  created_at  timestamptz not null default now(),
+  payload     text not null,
+  sha256      text not null
+);
+create index if not exists sair_backups_device_idx on sair_backups (device_id, created_at desc);
+```

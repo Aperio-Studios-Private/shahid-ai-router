@@ -108,3 +108,16 @@ Task format per `.agent/TASK_EXECUTION_PROTOCOL.md`. IDs: `P<phase>-T<nn>`. Phas
 | P11-T06 | Final release claim: code-complete with residuals (owner waiver needed for BLOCKED items) | PASS |
 
 Perf budget measurement, full security review pass, clean-install checklist, SBOM; signing requires human-provided certs (see BLOCKED.md when reached).
+
+## Phase 12 — Cloud auto-backup (COMPLETE — see reports/phase-reports/phase-12.md)
+
+| ID | Task | Status |
+|---|---|---|
+| P12-T01 | Plan + independent review (AMEND BEFORE IMPLEMENTATION → all 10 findings resolved) | PASS |
+| P12-T02 | cloud_backup.rs: trait + Neon + Supabase impls; sqlx postgres/tls-rustls-ring (app crate) | PASS |
+| P12-T03 | Scheduler + dirty flag + 8 IPC commands (cloud_configure/test/status/list/backup_now/restore/commit/disable); vault-backed secrets | PASS |
+| P12-T04 | BackupScreen Cloud section (consent-gated configure, snapshots, restore, disable) | PASS |
+| P12-T05 | Supabase PostgREST impl + wiremock contract test | PASS |
+| P12-T06 | Cloudflare D1 impl | BACKLOG (optional, not started) |
+| P12-T07 | Tests: schedule decision, DSN rules, DSN-free errors, in-memory roundtrip, Supabase contract, allowlist invariant | PASS |
+| P12-T08 | Docs: ADR-019, FR-024, docs/06/07 amendments, traceability, CHANGELOG, README | PASS |

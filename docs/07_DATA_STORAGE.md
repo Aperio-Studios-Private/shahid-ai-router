@@ -19,4 +19,6 @@ Use foreign keys, indexes, transactions and migrations. Never keep DB transactio
 
 Secret lifecycle: accept secret in backend; store in OS vault; persist opaque reference; retrieve only for outbound request; delete vault item on credential deletion; on import decrypt in memory and re-store in destination vault.
 
+Config data may additionally live at rest in the user's own cloud backend (Phase 12, ADR-019) — always as the versioned `.sair` envelope (encrypted or config-only); request records never leave the machine.
+
 Default to metadata-only request history with configurable retention. Do not store prompt/response bodies unless a future explicit opt-in design includes retention and privacy controls.

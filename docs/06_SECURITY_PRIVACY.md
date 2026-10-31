@@ -19,7 +19,7 @@ Least-privilege capabilities, narrow validated commands, restrictive CSP, no sec
 Strict size/file/path/schema limits; defend against path traversal and decompression bombs; authenticate encrypted backups; stage changes transactionally; never execute imported content.
 
 ## Privacy
-No account, cloud sync or telemetry by default. Prompt/response bodies are not logged by default. Network requests only for configured providers and explicitly enabled update/diagnostic features.
+No account, cloud sync or telemetry by default. Prompt/response bodies are not logged by default. Network requests only for configured providers, the explicitly enabled cloud backup destination (envelope-only, TLS-enforced, consent-gated at enable, purge on disable — ADR-019), and explicitly enabled update/diagnostic features.
 
 ## Threat-model addendum (Phase 2, 2026-10-31 — review finding F-12)
 New surfaces introduced by the security/persistence phase, with their mitigations:
@@ -27,4 +27,5 @@ New surfaces introduced by the security/persistence phase, with their mitigation
 - **Token-reveal IPC command** — the UI can obtain the gateway token on demand. Mitigations: masked by default with explicit reveal, never persisted in webview storage, never logged (sweep-tested), regeneration is consent-gated with client-impact warning, and old vault items are deleted after a crash-safe swap (create → persist ref → delete old).
 - **Degraded-start states** — vault or DB unavailable at startup. Mitigations: fail-closed (the gateway never starts without its token from the vault; startup aborts before bind on migration failure); explicit error state surfaced in the UI; no silent plaintext fallback (docs/06 Secrets).
 - **Malicious local clients** (in-scope since Phase 0) — added concrete bounds: immediate 503 at concurrency capacity (no unbounded queueing), per-request timeout budget (408), body size limit (413), Host allowlist, auth on every route including `/healthz` and 404s.
+- **Cloud backup destination (Phase 12)** — a user-owned Postgres/REST backend receives backup envelopes on a schedule. Mitigations: only the versioned `.sair` envelope leaves the device (encrypted mode = AES-256-GCM ciphertext; config mode contains no secrets); the connection string and backup passphrase live only in the OS vault; connect errors are mapped to DSN-free messages before any sink; cloud settings keys are excluded from the export allowlist (tested invariant); purge/disable removes the device's cloud rows and vault items; request records/health events/logs never sync.
 - **Residual risks (documented, revalidated at Phase 11):** SSRF resolve-to-connect race minimized via validating-resolver design (ADR-015) but not provably eliminated; DNS-rebinding defended by Host allowlist for the *inbound* path.

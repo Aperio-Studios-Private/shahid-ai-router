@@ -22,6 +22,13 @@ Evidence: `reports/phase-reports/audit-fixes.md`; details in `tasks/COMPLETED.md
 - Telemetry: sensitive-field redaction list extended (secret_b64, refresh_token, access_token, bearer, passphrase, client_secret); profile verification date no longer hardcoded.
 - Bookkeeping: ADR-007 → Accepted; PRD FR-023 Codex amendment note; docs/05 v1-strategy/backoff status notes; docs/08 Screens section reconciled with the Models/Deployments fold; ROADMAP completion status; HANDOFF corrections (23 FR rows, phase-0 evidence pointer); task boards repaired (literal `\n` artifacts removed; stale "current phase" headers fixed); LICENSE artifact fixed.
 
+### Added (Phase 12 — Cloud auto-backup, ADR-019)
+- Opt-in cloud sync of the `.sair` envelope to a user-owned free-tier backend: **Neon** (SQLx Postgres, `sslmode=require`) and **Supabase** (PostgREST) — the app's first internet-connected feature, transport-only over the Phase 10 crypto.
+- Auto schedule: daily + 5-min-quiet on-change debounce (60 s tick, spawn-after-manage per the plan review); failures surface as status + Logs entries, never block the gateway.
+- Encrypted (default; passphrase held in the OS vault, never uploaded) and config-only modes; snapshot list across devices; prune to last 10 per device; restore reuses the unchanged consent-gated preview/commit flow via a temp `.sair` file; disable with optional cloud purge.
+- 8 new IPC commands (`cloud_configure/test/status/list/backup_now/restore/commit/disable`), a Cloud section in the Backup & Restore screen, DSN-free error mapping (connection strings can never reach a log), and a tested invariant that cloud settings keys never join the export allowlist.
+- Docs: ADR-019, PRD FR-024, docs/06 network-allowlist + threat-model addendum, docs/07 note.
+
 ### Added
 - UI: Backup & Restore screen (export/preview/commit) and About screen; Models/Deployments nav entries now route to Providers per the docs/08 amendment; provider type options for Anthropic/Gemini; NVIDIA NIM documented as a supported OpenAI-compatible target (README, docs/04).
 - CI: `security` job (cargo-audit + npm audit) — the phase-11 evidence described an audit job the workflow never contained.

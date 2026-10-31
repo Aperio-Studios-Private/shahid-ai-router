@@ -26,3 +26,13 @@ verified locally (cargo test/clippy/fmt + tsc/vitest/vite build on macOS):
 
 Earlier: Phases 1–11 implementation tasks — see `tasks/BACKLOG.md` tables and
 `reports/phase-reports/phase-1..11.md` for gate evidence.
+
+## 2026-10-31 — Phase 12: Cloud auto-backup (FR-024, ADR-019)
+
+| ID | Task | Status |
+|---|---|---|
+| P12-T02 | `cloud_backup.rs` — dyn-safe provider trait, Neon (SQLx Postgres) + Supabase (PostgREST) impls, envelope builder (spawn_blocking), DSN-free errors, schedule predicate | PASS |
+| P12-T03 | Scheduler (spawn-after-manage, 60 s tick, daily+debounce), 8 IPC commands, 20 `mark_cloud_dirty()` call sites, vault-backed DSN/key/passphrase | PASS |
+| P12-T04 | Backup & Restore → Cloud section (consent dialog, status, snapshots, restore via unchanged preview/commit, disable+purge) | PASS |
+| P12-T07 | 7 new tests incl. DSN-leak sweep, Supabase wiremock contract, export-allowlist invariant | PASS |
+| P12-T08 | ADR-019 + PRD FR-024 + docs/06/07 + traceability + CHANGELOG/README | PASS |

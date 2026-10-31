@@ -17,6 +17,9 @@ pub async fn set_credential_priority_weight(
     priority: i64,
     weight: i64,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -44,6 +47,9 @@ pub async fn add_provider_account(
     label: String,
     group_key: Option<String>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -58,6 +64,9 @@ pub async fn assign_credential_account(
     credential_id: String,
     account_id: String,
 ) -> Result<(), String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     state
         .db
         .repos()
@@ -193,11 +202,15 @@ pub async fn hash_profile_target(agent_id: String, file_index: usize) -> Result<
 
 #[tauri::command]
 pub async fn apply_agent_profile(
+    state: State<'_, AppState>,
     agent_id: String,
     file_index: usize,
     content: String,
     expected_existing: Option<String>,
 ) -> Result<String, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     // Consent is the UI's confirm dialog; the backend enforces the rest.
     let profile = sair_domain::profiles::generate_profile(&agent_id, 8787, String::new(), None)
         .ok_or("unknown agent")?;
@@ -521,6 +534,9 @@ pub async fn commit_backup(
     path: String,
     re_store_secrets: bool,
 ) -> Result<serde_json::Value, String> {
+    // Cloud auto-backup (Phase 12): config may change → schedule a sync.
+    state.mark_cloud_dirty();
+
     let mut held = held_import_slot().lock().await;
     let Some((held_path, held_payload)) = held.as_ref() else {
         return Err("no preview in progress (or it expired) — preview first".to_string());

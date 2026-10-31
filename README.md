@@ -26,7 +26,7 @@ the current state, residuals, and owner actions.
   database stores opaque references
 - Metadata-only request history with full routing-decision records ("why was this
   deployment unavailable") and a 30-day retention policy
-- `.sair` config-only and encrypted (Argon2id + AES-256-GCM) backups
+- `.sair` config-only and encrypted (Argon2id + AES-256-GCM) backups — **plus optional cloud auto-backup** (Phase 12) to your own free-tier Neon or Supabase project: daily + on-change snapshots, in-app restore, secrets only inside the AES-256-GCM envelope, request logs never leave the machine
 - Agent profiles for Claude Code, Gemini CLI, and generic OpenAI-compatible clients
 - SSRF hardening (validating resolver + literal/scheme checks), token auth with
   constant-time comparison, Host allowlist, per-request timeout, per-deployment
@@ -44,6 +44,17 @@ cd ../.. && cargo run -p shahid-ai-router
 
 The gateway autostarts on `127.0.0.1:8787` (loopback only, token-authenticated —
 reveal/copy the token in the app's Local Gateway screen).
+
+## Cloud auto-backup (optional)
+
+Point the app at your own free-tier database and it snapshots your configuration
+automatically — see [docs/10](docs/10_BACKUP_RESTORE.md) and ADR-019:
+
+1. Create a Neon project ([neon.com](https://neon.com) — free, no card) or a Supabase project.
+2. Run the `sair_backups` table SQL from [docs/04 §Cloud backup table](docs/04_PROVIDER_PROTOCOLS.md) in the project's SQL editor.
+3. In the app: **Backup & Restore → Cloud backup (beta)** → paste the connection string (Neon) or project URL + API key (Supabase), choose encrypted (default) or config-only, enable the schedule.
+
+Encrypted snapshots include your API keys but are AES-256-GCM ciphertext — useless without your passphrase, which lives only in this machine's OS vault (keep a copy in your password manager: restoring on a new machine needs it). Request logs are never uploaded.
 
 ## NVIDIA NIM
 
