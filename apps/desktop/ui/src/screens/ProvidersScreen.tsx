@@ -102,9 +102,30 @@ export function ProvidersScreen() {
         {providers.map((p) => (
           <li key={p.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
             <div className="flex items-center justify-between gap-2">
-              <button type="button" aria-expanded={expanded === p.id} className="text-left" onClick={() => setExpanded(expanded === p.id ? null : p.id)}>
+              <button
+                type="button"
+                aria-expanded={expanded === p.id}
+                className="flex items-center gap-1.5 text-left"
+                onClick={() => setExpanded(expanded === p.id ? null : p.id)}
+              >
+                <span
+                  aria-hidden="true"
+                  className={
+                    "inline-block text-xs text-zinc-400 transition-transform " +
+                    (expanded === p.id ? "rotate-90" : "")
+                  }
+                >
+                  ▶
+                </span>
                 <span className="text-sm font-medium">{p.name}</span>
-                <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-400">{p.provider_type}</span>
+                <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">{p.provider_type}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpanded(expanded === p.id ? null : p.id)}
+                className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                {expanded === p.id ? "Close" : "Add keys & models"}
               </button>
               <span
                 className="rounded px-2 py-0.5 text-xs font-medium"
@@ -155,15 +176,18 @@ export function ProvidersScreen() {
           e.preventDefault();
           // Tauri v2 maps JS camelCase keys to Rust snake_case params; the
           // form state is snake_case, so map explicitly (audit P1 fix).
-          void run(() =>
-            invokeOr("add_provider", {
+          void run(async () => {
+            // run() refreshes afterwards; capture the new id first so we can
+            // open the freshly added provider (its API-key form lives inside).
+            const newId = await invokeOr<string>("add_provider", {
               name: form.name,
               providerType: form.provider_type,
               baseUrl: form.base_url,
               allowLoopback: form.allow_loopback,
               notes: null,
-            }),
-          );
+            });
+            if (newId) setExpanded(newId);
+          });
         }}
       >
         <input required placeholder="Name (shown in the app only)" aria-label="Provider name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-md border border-zinc-300 px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-900" />
