@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { invokeOr } from "../lib/tauri";
+import { Hint } from "../components/ui";
 import { Tooltip } from "../components/ui";
 
 interface ProfileResult {
@@ -22,6 +23,7 @@ const AGENTS: AgentOption[] = [
   { id: "claude-code", label: "Claude Code" },
   { id: "gemini-cli", label: "Gemini CLI" },
   { id: "generic-openai", label: "Generic OpenAI-compatible" },
+  { id: "universal-env", label: "Any other harness (env vars)" },
   { id: "codex-cli", label: "OpenAI Codex CLI (unsupported)" },
 ];
 
@@ -34,6 +36,43 @@ export function AgentIntegrationsScreen() {
   const [busy, setBusy] = useState(false);
 
   const generate = useCallback(async () => {
+    // Universal harness profile is built client-side: a copy-paste env block
+    // that works with any OpenAI-compatible harness (Aider, Continue,
+    // OpenCode, Goose, Cline…). Copy-only by design — the app cannot know
+    // every harness's config file, and docs/09 forbids guessing paths.
+    if (agentId === "universal-env") {
+      const gw = await invokeOr<{ addr: string | null }>("get_gateway_state", {});
+      const addr = gw?.addr ?? "127.0.0.1:8787";
+      setProfile({
+        agent_id: "universal-env",
+        config_text:
+          `# Paste into your harness's environment (.env, shell profile, or launcher)
+` +
+          `OPENAI_BASE_URL=http://${addr}/v1
+` +
+          `OPENAI_API_KEY=<<GATEWAY_TOKEN>>   # Local Gateway screen → Reveal → Copy
+` +
+          `OPENAI_MODEL=${alias || "fast-model"}
+` +
+          `# Anthropic-style harnesses (Cline, some launchers):
+` +
+          `ANTHROPIC_BASE_URL=http://${addr}
+` +
+          `ANTHROPIC_AUTH_TOKEN=<<GATEWAY_TOKEN>>
+` +
+          `ANTHROPIC_MODEL=${alias || "fast-model"}
+`,
+        files: [],
+        rollback: "Nothing to roll back: this profile only copies text.",
+        limitations:
+          "Works with any OpenAI-compatible or Anthropic-style harness that reads these env vars (Aider, Continue, OpenCode, Goose, Cline…). If your tool uses a config file instead, point its base URL at http://" +
+          addr +
+          "/v1 and use the gateway token as the key.",
+        applicable: false,
+        verification: "env-var contract tested against the gateway surfaces",
+      });
+      return;
+    }
     setBusy(true);
     setError(null);
     setProfile(null);
@@ -94,6 +133,12 @@ export function AgentIntegrationsScreen() {
   return (
     <section className="max-w-2xl">
       <h1 className="text-lg font-semibold">Agent Integrations</h1>
+      <Hint>
+        Claude Code and Gemini CLI get consent-gated config-file apply (backup
+        written first). Any other harness — Aider, Continue, OpenCode, Goose,
+        Cline, editors — use the env-vars option: copy the block into the
+        tool&apos;s environment.
+      </Hint>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
         Profiles are contract-tested (config shape + gateway contract). The
         real CLIs were not executed here — verify interactively before
