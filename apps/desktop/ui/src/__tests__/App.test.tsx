@@ -24,10 +24,9 @@ describe("App shell", () => {
 
   it("shows the guided Home screen by default", async () => {
     render(<App />);
-    expect(
-      screen.getByRole("heading", { name: "Welcome to Shahid AI Router" }),
-    ).toBeInTheDocument();
-    // The onboarding checklist renders with live-derived steps (async load).
+    // The gradient header card carries the welcome heading (Phase 14 cards).
+    expect(screen.getByText("Shahid AI Router")).toBeInTheDocument();
+    // The onboarding cards render with live-derived steps (async load).
     expect(await screen.findByText("Get started")).toBeInTheDocument();
     expect(await screen.findByText("Add a provider")).toBeInTheDocument();
   });
