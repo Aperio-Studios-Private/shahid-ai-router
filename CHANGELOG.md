@@ -2,7 +2,7 @@
 
 All notable changes to Shahid AI Router. Format: Keep a Changelog; versioning: SemVer.
 
-## [Unreleased] — 2026-10-31 (post-audit fixes)
+## [0.1.1] — 2026-11-01 (audit fixes + Phases 12-16)
 
 Independent full-repository audit (every file, 11 reviewer agents); all P1/P2 findings fixed.
 Evidence: `reports/phase-reports/audit-fixes.md`; details in `tasks/COMPLETED.md` (AF-01..AF-13).

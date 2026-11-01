@@ -3640,7 +3640,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sair-domain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3649,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "sair-gateway"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3681,7 +3681,7 @@ dependencies = [
 
 [[package]]
 name = "sair-persistence"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "ring",
@@ -3697,7 +3697,7 @@ dependencies = [
 
 [[package]]
 name = "sair-providers"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -3717,7 +3717,7 @@ dependencies = [
 
 [[package]]
 name = "sair-vault"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "ring",
@@ -4090,7 +4090,7 @@ dependencies = [
 
 [[package]]
 name = "shahid-ai-router"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "argon2",
