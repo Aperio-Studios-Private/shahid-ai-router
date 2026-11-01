@@ -595,6 +595,27 @@ export function OverviewScreen({
                   >
                     Copy config
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void invokeOr<string>("reveal_gateway_token", {}).then((token) => {
+                        void invokeOr<{ addr: string | null }>("get_gateway_state", {}).then((gw) => {
+                          const exports =
+                            `export ANTHROPIC_BASE_URL=http://${gw?.addr ?? "127.0.0.1:8787"}\n` +
+                            `export ANTHROPIC_AUTH_TOKEN=${token ?? "<unavailable>"}\n` +
+                            `export ANTHROPIC_MODEL=${"fast-model"}`;
+                          void navigator.clipboard
+                            .writeText(exports)
+                            .then(() =>
+                              setWizardLog((l) => [...l, "Shell exports copied (real token) ✓"]),
+                            );
+                        });
+                      });
+                    }}
+                    className="rounded border border-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    Copy shell exports (real token)
+                  </button>
                 </div>
                 <pre className="mt-1 max-h-32 overflow-auto rounded-md bg-zinc-100 p-2 font-mono text-[10px] dark:bg-zinc-800">
                   {wizardProfile}

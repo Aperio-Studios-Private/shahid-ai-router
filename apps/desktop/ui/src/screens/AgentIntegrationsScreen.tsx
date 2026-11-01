@@ -90,6 +90,58 @@ export function AgentIntegrationsScreen() {
     }
   }, [agentId, alias]);
 
+  /** True one-click automation (user request): token + URL filled in, file
+   *  applied with backup + hash guard. Writes the real token to the config —
+   *  consented explicitly in the dialog (same trust level as Claude Code's
+   *  own auth setup). */
+  const oneClickConnect = async () => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const token = await invokeOr<string>("reveal_gateway_token", {});
+      if (!token) throw "gateway token unavailable (is the gateway set up?)";
+      const result = await invokeOr<ProfileResult>("generate_agent_profile", {
+        agentId: "claude-code",
+        alias: alias || "fast-model",
+        fastAlias: null,
+      });
+      if (!result || !result.applicable) throw "Claude Code profile unavailable";
+      const content = result.config_text.replaceAll(
+        "<<GATEWAY_TOKEN>>",
+        token,
+      );
+      const hash = await invokeOr<string>("hash_profile_target", {
+        agentId: result.agent_id,
+        fileIndex: 0,
+      });
+      const ok = window.confirm(
+        `One-click connect Claude Code:\n\n` +
+          `• Writes ${result.files[0]} with the gateway URL + REAL token\n` +
+          `• A backup (shahid-backup-<timestamp>) is written next to it first\n` +
+          `• The token sits in that file as plain text (same as Claude Code's own auth)\n\n` +
+          `Continue?`,
+      );
+      if (!ok) {
+        setBusy(false);
+        return;
+      }
+      const applied = await invokeOr<string>("apply_agent_profile", {
+        agentId: result.agent_id,
+        fileIndex: 0,
+        content,
+        expectedExisting: hash ?? "",
+      });
+      setMessage(
+        `Connected! ${applied} written. Restart Claude Code, then pick model "${alias || "fast-model"}". Rollback: ${result.rollback}`,
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const applyToFile = async (index: number) => {
     if (!profile) return;
     const file = profile.files[index];
@@ -133,6 +185,19 @@ export function AgentIntegrationsScreen() {
   return (
     <section className="max-w-2xl">
       <h1 className="text-lg font-semibold">Agent Integrations</h1>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void oneClickConnect()}
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-40"
+      >
+        ⚡ One-click connect Claude Code (writes the real token, backup first)
+      </button>
+      <Hint>
+        This does everything: generates the config with your live gateway
+        address, fills in the real token from the Keychain, backs up your
+        current file, and writes it atomically. Restart Claude Code after.
+      </Hint>
       <Hint>
         Claude Code and Gemini CLI get consent-gated config-file apply (backup
         written first). Any other harness — Aider, Continue, OpenCode, Goose,
