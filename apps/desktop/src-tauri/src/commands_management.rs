@@ -438,9 +438,11 @@ pub async fn delete_credential(
 
 #[derive(Debug, Serialize)]
 pub struct DeploymentView {
+    pub model_pk: String,
     pub id: String,
     pub model_id: String,
     pub protocol_family: String,
+    pub capabilities: Value,
     pub enabled: bool,
     pub endpoint_override: Option<String>,
 }
@@ -459,8 +461,10 @@ pub async fn list_deployments(
         .into_iter()
         .map(|d| DeploymentView {
             id: d.id,
+            model_pk: d.model_pk,
             model_id: d.model_id,
             protocol_family: d.protocol_family,
+            capabilities: d.capabilities,
             enabled: d.enabled,
             endpoint_override: d.endpoint_override,
         })

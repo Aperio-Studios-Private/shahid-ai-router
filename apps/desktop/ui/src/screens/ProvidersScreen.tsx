@@ -43,8 +43,16 @@ interface ModelInfo {
 
 interface Deployment {
   id: string;
+  model_pk: string;
   model_id: string;
   protocol_family: string;
+  capabilities: {
+    streaming?: boolean;
+    tool_calling?: boolean;
+    vision?: boolean;
+    structured_output?: boolean;
+    context_window?: number | null;
+  };
   enabled: boolean;
   endpoint_override: string | null;
 }
@@ -574,6 +582,7 @@ function DeploymentsPanel({
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [modelForm, setModelForm] = useState({ model_id: "", protocol_family: "openai_chat" });
+  const [editingCaps, setEditingCaps] = useState<string | null>(null);
   const [fetched, setFetched] = useState<ModelInfo[] | null>(null);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [fetching, setFetching] = useState(false);
@@ -650,7 +659,24 @@ function DeploymentsPanel({
                 <span className="truncate font-mono font-medium">{d.model_id}</span>
                 <span className="text-zinc-400">{d.protocol_family}</span>
               </span>
-              <span className="flex shrink-0 gap-1">
+              <span className="flex shrink-0 items-center gap-1">
+                {(d.capabilities?.tool_calling ?? false) && (
+                  <span className="rounded bg-sky-100 px-1 text-[10px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">tools</span>
+                )}
+                {(d.capabilities?.vision ?? false) && (
+                  <span className="rounded bg-violet-100 px-1 text-[10px] text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">vision</span>
+                )}
+                {(d.capabilities?.structured_output ?? false) && (
+                  <span className="rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">json</span>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  className={BTN}
+                  onClick={() => setEditingCaps(editingCaps === d.id ? null : d.id)}
+                >
+                  Caps
+                </button>
                 <button
                   type="button"
                   disabled={busy}
@@ -671,6 +697,78 @@ function DeploymentsPanel({
           ))}
         </ul>
       )}
+      {editingCaps && (() => {
+        const dep = deployments.find((d) => d.id === editingCaps);
+        if (!dep) return null;
+        const caps = {
+          streaming: dep.capabilities?.streaming ?? false,
+          tool_calling: dep.capabilities?.tool_calling ?? false,
+          vision: dep.capabilities?.vision ?? false,
+          structured_output: dep.capabilities?.structured_output ?? false,
+          context_window: dep.capabilities?.context_window ?? null,
+        };
+        return (
+          <div className="rise mt-2 rounded-lg border border-zinc-200 bg-zinc-50/60 p-2.5 text-xs dark:border-zinc-800 dark:bg-zinc-800/40">
+            <p className="font-medium">
+              Capabilities for <span className="font-mono">{dep.model_id}</span>
+              <Tooltip label="These gate routing: a request asking for tools/vision/structured output skips deployments whose model lacks them. Claude Code and Codex send tools — set tool_calling for those." />
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              {(["streaming", "tool_calling", "vision", "structured_output"] as const).map((k) => (
+                <label key={k} className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={caps[k]}
+                    onChange={(e) =>
+                      setDeployments((ds) =>
+                        (ds ?? []).map((x) =>
+                          x.id === dep.id ? { ...x, capabilities: { ...caps, [k]: e.target.checked } } : x,
+                        ),
+                      )
+                    }
+                  />
+                  {k === "structured_output" ? "structured output" : k}
+                </label>
+              ))}
+              <input
+                type="number"
+                aria-label="Context window"
+                placeholder="ctx (tokens)"
+                value={caps.context_window ?? ""}
+                onChange={(e) =>
+                  setDeployments((ds) =>
+                    (ds ?? []).map((x) =>
+                      x.id === dep.id
+                        ? { ...x, capabilities: { ...caps, context_window: e.target.value === "" ? null : Number(e.target.value) } }
+                        : x,
+                    ),
+                  )
+                }
+                className="w-28 rounded border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-800"
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void run(() =>
+                    invokeOr("update_model_capabilities", {
+                      modelPk: dep.model_pk,
+                      streaming: caps.streaming,
+                      toolCalling: caps.tool_calling,
+                      vision: caps.vision,
+                      structuredOutput: caps.structured_output,
+                      contextWindow: caps.context_window,
+                    }),
+                  ).then(() => setEditingCaps(null))
+                }
+                className={BTN + " border-[#006eb9] bg-[#006eb9] text-white hover:bg-[#005c9b]"}
+              >
+                Save capabilities
+              </button>
+            </div>
+          </div>
+        );
+      })()}
       <div className="mt-3 rounded-lg border border-zinc-100 bg-zinc-50/60 p-2.5 dark:border-zinc-800 dark:bg-zinc-800/40">
         <div className="flex flex-wrap items-center gap-2">
           <button
