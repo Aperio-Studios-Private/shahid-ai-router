@@ -36,6 +36,7 @@ export function LogsScreen() {
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Debounced alias filter: typing fires one query 300ms after the last
   // keystroke instead of one per keystroke (audit P2 fix).
@@ -70,6 +71,11 @@ export function LogsScreen() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const t = window.setInterval(() => void refresh(), 5000);
+    return () => window.clearInterval(t);
+  }, [autoRefresh, refresh]);
 
   const copyCorrelation = async (id: string) => {
     try {
@@ -105,6 +111,14 @@ export function LogsScreen() {
         <button type="button" onClick={() => void refresh()} className="rounded-md border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700">
           Refresh
         </button>
+        <label className="flex items-center gap-1.5 text-xs">
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+          />
+          Auto (5s)
+        </label>
       </div>
 
       {error && (
