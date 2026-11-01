@@ -1035,8 +1035,8 @@ pub fn should_upload(
 #[cfg(test)]
 mod tests {
     use super::{
-        CloudBackupProvider, GIST_FILE, GistProvider, NeonProvider, SnapshotMeta, SupabaseProvider,
-        should_upload,
+        CloudBackupProvider, D1Provider, GIST_FILE, GistProvider, NeonProvider, SnapshotMeta,
+        SupabaseProvider, should_upload,
     };
     use std::time::Duration;
 
@@ -1478,6 +1478,80 @@ mod tests {
             });
             assert!(has_auth, "authorization header missing on {:?}", req.url);
         }
+    }
+
+    /// D1 contract test: query POSTs carry auth + params; the response shape
+    /// (result[0].results) is parsed. Uses the injectable API base.
+    #[tokio::test]
+    async fn d1_provider_contract_roundtrip() {
+        let server = wiremock::MockServer::start().await;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::new();
+        let provider = D1Provider::new("acct123/db456", "cf-token-789", client)
+            .unwrap()
+            .with_api_base(&format!("http://{}", server.address()));
+
+        // test() → SELECT 1; respond with the D1 result envelope.
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/accounts/acct123/d1/database/db456/query",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "result": [{ "results": [{ "1": 1 }], "success": true }],
+                    "success": true
+                })),
+            )
+            .mount(&server)
+            .await;
+        provider.test().await.unwrap();
+
+        // upload → INSERT with params.
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/accounts/acct123/d1/database/db456/query",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "result": [{ "results": [], "success": true }], "success": true }),
+            ))
+            .mount(&server)
+            .await;
+        provider
+            .upload(
+                "{\"format\":\"sair-backup\"}".to_string(),
+                "sha-d1".into(),
+                "dev-1".into(),
+                "encrypted".into(),
+            )
+            .await
+            .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(!requests.is_empty());
+        for req in &requests {
+            let has_auth = req.headers.iter().any(|(name, value)| {
+                name.as_str() == "authorization" && format!("{:?}", value).contains("cf-token-789")
+            });
+            assert!(has_auth, "authorization header missing on {:?}", req.url);
+        }
+        // Find the INSERT POST (the first POST is test()'s SELECT 1).
+        let insert = requests
+            .iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .find_map(|r| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).ok()?;
+                (body["sql"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("INSERT INTO sair_backups"))
+                .then_some(body)
+            })
+            .expect("INSERT query recorded");
+        assert_eq!(
+            insert["params"][4], "{\"format\":\"sair-backup\"}",
+            "envelope not byte-exact in INSERT params"
+        );
+        assert_eq!(insert["params"][5], "sha-d1");
     }
 
     #[test]
