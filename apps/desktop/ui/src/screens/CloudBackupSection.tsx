@@ -43,7 +43,7 @@ interface CloudPreview {
  */
 export function CloudBackupSection() {
   const [status, setStatus] = useState<CloudStatus | null>(null);
-  const [provider, setProvider] = useState<"neon" | "supabase">("neon");
+  const [provider, setProvider] = useState<"neon" | "supabase" | "github-gist">("neon");
   const [mode, setMode] = useState<"encrypted" | "config">("encrypted");
   const [dsn, setDsn] = useState("");
   const [key, setKey] = useState("");
@@ -349,6 +349,7 @@ export function CloudBackupSection() {
           >
             <option value="neon">Neon (Postgres)</option>
             <option value="supabase">Supabase</option>
+            <option value="github-gist">GitHub secret Gist (zero infra)</option>
           </select>
           <select
             aria-label="Backup mode"
@@ -361,18 +362,24 @@ export function CloudBackupSection() {
           </select>
           <input
             required
-            placeholder={provider === "neon" ? "postgresql://…?sslmode=require (pooled host)" : "https://<project>.supabase.co"}
+            placeholder={
+              provider === "neon"
+                ? "postgresql://…?sslmode=require (pooled host)"
+                : provider === "supabase"
+                  ? "https://<project>.supabase.co"
+                  : "Gist id (from the gist URL)"
+            }
             aria-label="Connection string or project URL"
             value={dsn}
             onChange={(e) => setDsn(e.target.value)}
             className="rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
           />
-          {provider === "supabase" && (
+          {(provider === "supabase" || provider === "github-gist") && (
             <input
               required
               type="password"
-              placeholder="Supabase API key (service_role or anon with table access)"
-              aria-label="Supabase API key"
+              placeholder={provider === "supabase" ? "Supabase API key (service_role or anon with table access)" : "GitHub token with gist scope"}
+              aria-label="Cloud API key"
               value={key}
               onChange={(e) => setKey(e.target.value)}
               className="rounded-md border border-zinc-300 px-3 py-1.5 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"

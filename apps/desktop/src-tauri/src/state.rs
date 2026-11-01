@@ -504,6 +504,25 @@ impl AppState {
                     dsn.as_str(),
                 )?))
             }
+            "github-gist" => {
+                let key = config
+                    .key
+                    .as_ref()
+                    .ok_or_else(|| "GitHub token missing from vault".to_string())?;
+                let dsn = config
+                    .dsn
+                    .as_ref()
+                    .ok_or_else(|| "gist id missing from vault".to_string())?;
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("client build failed: {e}"))?;
+                Ok(Arc::new(crate::cloud_backup::GistProvider::new(
+                    key.as_str(),
+                    dsn.as_str(),
+                    client,
+                )?))
+            }
             "supabase" => {
                 let key = config
                     .key

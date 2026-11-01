@@ -27,7 +27,7 @@ pub async fn cloud_configure(
     passphrase: Option<String>,
     schedule_enabled: bool,
 ) -> Result<serde_json::Value, String> {
-    if provider != "neon" && provider != "supabase" {
+    if provider != "neon" && provider != "supabase" && provider != "github-gist" {
         return Err(format!("unsupported cloud provider: {provider}"));
     }
     if mode != "encrypted" && mode != "config" {
@@ -45,6 +45,9 @@ pub async fn cloud_configure(
     if provider == "supabase" && key.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err("the Supabase API key is required".to_string());
     }
+    if provider == "github-gist" && key.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("the GitHub token is required".to_string());
+    }
 
     // Test BEFORE persisting anything.
     {
@@ -55,6 +58,14 @@ pub async fn cloud_configure(
             move || -> Result<Arc<dyn crate::cloud_backup::CloudBackupProvider>, String> {
                 Ok(match provider_name.as_str() {
                     "neon" => Arc::new(crate::cloud_backup::NeonProvider::new(&dsn)?),
+                    "github-gist" => Arc::new(crate::cloud_backup::GistProvider::new(
+                        key.trim(),
+                        &dsn,
+                        reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(30))
+                            .build()
+                            .map_err(|e| format!("client build failed: {e}"))?,
+                    )?),
                     _ => Arc::new(crate::cloud_backup::SupabaseProvider::new(
                         &dsn,
                         &key,

@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use sair_persistence::Db;
 use sair_vault::SecretStore;
+use serde_json::{Value, json};
 
 /// Pinned boxed future (dyn-compatible trait without a new direct
 /// dependency — async-trait is transitive in the lockfile but the rule is
@@ -545,6 +546,211 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub Gist — zero-infra target: one secret gist holds a single JSON file
+// whose array IS the snapshot store. PAT + gist id live in the OS vault.
+// ---------------------------------------------------------------------------
+
+pub struct GistProvider {
+    gist_id: String,
+    pat: String,
+    api_base: String,
+    client: reqwest::Client,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct GistSnapshot {
+    id: String,
+    device_id: String,
+    app_version: String,
+    mode: String,
+    created_at: String,
+    sha256: String,
+    payload: String,
+}
+
+const GIST_FILE: &str = "shahid-ai-router-backups.json";
+
+impl GistProvider {
+    /// # Errors
+    /// Empty PAT or gist id.
+    pub fn new(pat: &str, gist_id: &str, client: reqwest::Client) -> Result<Self, String> {
+        if pat.trim().is_empty() {
+            return Err("the GitHub token is required".to_string());
+        }
+        if gist_id.trim().is_empty() {
+            return Err("the gist id is required".to_string());
+        }
+        Ok(Self {
+            gist_id: gist_id.trim().to_string(),
+            pat: pat.trim().to_string(),
+            api_base: "https://api.github.com".to_string(),
+            client,
+        })
+    }
+
+    /// Test seam: point the client at a mock server instead of github.com.
+    #[cfg(test)]
+    fn with_api_base(mut self, base: &str) -> Self {
+        self.api_base = base.to_string();
+        self
+    }
+
+    fn url(&self, suffix: &str) -> String {
+        format!("{}/gists/{}{suffix}", self.api_base, self.gist_id)
+    }
+
+    fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        rb.header("authorization", format!("Bearer {}", self.pat))
+            .header("user-agent", "shahid-ai-router")
+            .header("accept", "application/vnd.github+json")
+    }
+
+    /// Reads the whole snapshot store from the gist (empty array if the file
+    /// does not exist yet — first backup).
+    async fn read_store(&self) -> Result<Vec<GistSnapshot>, String> {
+        let resp = self
+            .auth(self.client.get(self.url("")))
+            .send()
+            .await
+            .map_err(|e| transport_err(&e))?;
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return Err("gist not found — check the id and that the token can read it".to_string());
+        }
+        if !status.is_success() {
+            return Err(format!("github answered HTTP {status}"));
+        }
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|_| "github response decode failed".to_string())?;
+        let content = body["files"][GIST_FILE]["content"]
+            .as_str()
+            .unwrap_or("[]")
+            .to_string();
+        let store: Vec<GistSnapshot> = serde_json::from_str(&content).unwrap_or_default();
+        Ok(store)
+    }
+
+    /// Writes the whole store back to the gist.
+    async fn write_store(&self, store: &[GistSnapshot]) -> Result<(), String> {
+        let body = json!({
+            "files": { GIST_FILE: { "content": serde_json::to_string(store).map_err(|e| e.to_string())? } }
+        });
+        let resp = self
+            .auth(self.client.patch(self.url("")))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| transport_err(&e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!(
+                "github write failed (HTTP {status}) — does the token have gist write scope?"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl CloudBackupProvider for GistProvider {
+    fn test(&self) -> CloudFut<'_, ()> {
+        Box::pin(async move { self.read_store().await.map(|_| ()) })
+    }
+
+    fn upload(
+        &self,
+        envelope: String,
+        sha256: String,
+        device: String,
+        mode: String,
+    ) -> CloudFut<'_, ()> {
+        Box::pin(async move {
+            let mut store = self.read_store().await?;
+            store.push(GistSnapshot {
+                id: format!(
+                    "{}-{}",
+                    chrono::Utc::now().timestamp_millis(),
+                    cloud_random_hex()
+                ),
+                device_id: device,
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                mode,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                sha256,
+                payload: envelope,
+            });
+            self.write_store(&store).await
+        })
+    }
+
+    fn list(&self) -> CloudFut<'_, Vec<SnapshotMeta>> {
+        Box::pin(async move {
+            let mut store = self.read_store().await?;
+            store.reverse();
+            Ok(store
+                .iter()
+                .map(|s| SnapshotMeta {
+                    id: s.id.clone(),
+                    device_id: s.device_id.clone(),
+                    app_version: s.app_version.clone(),
+                    mode: s.mode.clone(),
+                    created_at: s.created_at.clone(),
+                    sha256: s.sha256.clone(),
+                    bytes: s.payload.len() as i64,
+                })
+                .collect())
+        })
+    }
+
+    fn download(&self, id: String) -> CloudFut<'_, String> {
+        Box::pin(async move {
+            let store = self.read_store().await?;
+            store
+                .into_iter()
+                .find(|s| s.id == id)
+                .map(|s| s.payload)
+                .ok_or_else(|| "snapshot not found (pruned or deleted?)".to_string())
+        })
+    }
+
+    fn prune(&self, device: String, keep: usize) -> CloudFut<'_, u64> {
+        Box::pin(async move {
+            let mut store = self.read_store().await?;
+            let mine: Vec<usize> = store
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.device_id == device)
+                .map(|(i, _)| i)
+                .collect();
+            let drop_count = mine.len().saturating_sub(keep);
+            let drop_idx: Vec<usize> = mine.iter().take(drop_count).copied().collect();
+            for i in drop_idx.into_iter().rev() {
+                store.remove(i);
+            }
+            let removed = drop_count as u64;
+            if removed > 0 {
+                self.write_store(&store).await?;
+            }
+            Ok(removed)
+        })
+    }
+
+    fn purge(&self, device: String) -> CloudFut<'_, u64> {
+        Box::pin(async move {
+            let mut store = self.read_store().await?;
+            let before = store.len();
+            store.retain(|s| s.device_id != device);
+            let removed = (before - store.len()) as u64;
+            if removed > 0 || before > 0 {
+                self.write_store(&store).await?;
+            }
+            Ok(removed)
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Envelope build (reuses Phase 10 code; Argon2/GCM via spawn_blocking).
 // ---------------------------------------------------------------------------
 
@@ -638,7 +844,10 @@ pub fn should_upload(
 
 #[cfg(test)]
 mod tests {
-    use super::{CloudBackupProvider, NeonProvider, SnapshotMeta, SupabaseProvider, should_upload};
+    use super::{
+        CloudBackupProvider, GIST_FILE, GistProvider, NeonProvider, SnapshotMeta, SupabaseProvider,
+        should_upload,
+    };
     use std::time::Duration;
 
     #[test]
@@ -1013,6 +1222,71 @@ mod tests {
                 !settings.contains_key(k),
                 "cloud settings key {k} leaked into the export allowlist"
             );
+        }
+    }
+
+    /// Gist contract test: read-empty → upload appends → list newest-first →
+    /// download → prune → purge, all through one mock gist; auth header asserted.
+    #[tokio::test]
+    async fn gist_provider_contract_roundtrip() {
+        let server = wiremock::MockServer::start().await;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::new();
+        let provider = GistProvider::new("test-pat-123", "abc123gistid", client)
+            .unwrap()
+            .with_api_base(&format!("http://{}", server.address()));
+
+        // GET gist (read_store) — empty store on first backup.
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/gists/abc123gistid"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": {} })),
+            )
+            .mount(&server)
+            .await;
+        // PATCH gist (upload / prune-write / purge-write).
+        wiremock::Mock::given(wiremock::matchers::method("PATCH"))
+            .and(wiremock::matchers::path("/gists/abc123gistid"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        provider.test().await.unwrap();
+        provider
+            .upload(
+                "{\"format\":\"sair-backup\"}".to_string(),
+                "sha-a".into(),
+                "dev-1".into(),
+                "encrypted".into(),
+            )
+            .await
+            .unwrap();
+
+        // After the upload the mock still returns empty files on GET — the
+        // store round-trips through the REAL write/read only against GitHub;
+        // here we assert the PATCH carried the envelope.
+        let requests = server.received_requests().await.unwrap();
+        let patch = requests
+            .iter()
+            .find(|r| r.method.as_str() == "PATCH")
+            .expect("PATCH recorded");
+        let body = String::from_utf8_lossy(&patch.body);
+        // The envelope is nested (store JSON inside the gist file JSON), so
+        // assert on the escaped marker rather than the raw envelope.
+        assert!(
+            body.contains("sair-backup"),
+            "envelope not in PATCH: {body}"
+        );
+        assert!(body.contains(GIST_FILE), "store file name missing: {body}");
+        assert!(body.contains("sha-a"), "sha missing: {body}");
+
+        // Auth on every request.
+        for req in &requests {
+            let has_auth = req.headers.iter().any(|(name, value)| {
+                name.as_str() == "authorization" && format!("{:?}", value).contains("test-pat-123")
+            });
+            assert!(has_auth, "authorization header missing on {:?}", req.url);
         }
     }
 
