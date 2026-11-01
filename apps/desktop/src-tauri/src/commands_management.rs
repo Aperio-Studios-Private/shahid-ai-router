@@ -196,7 +196,9 @@ pub async fn fetch_provider_models(
         .retrieve(&secret_ref)
         .map_err(|_| "vault unavailable".to_string())?;
     let secret = SecretBytes::new(secret);
-    let key = secret.expose_str().map_err(|_| "credential not UTF-8".to_string())?;
+    let key = secret
+        .expose_str()
+        .map_err(|_| "credential not UTF-8".to_string())?;
 
     let policy = if provider.allow_loopback {
         SsrfPolicy::allow_loopback()
@@ -212,8 +214,7 @@ pub async fn fetch_provider_models(
         "gemini" => "/v1beta/models",
         _ => "/models",
     };
-    let parsed_url =
-        url::Url::parse(&format!("{base}{path}")).map_err(|e| e.to_string())?;
+    let parsed_url = url::Url::parse(&format!("{base}{path}")).map_err(|e| e.to_string())?;
     let request = client
         .request(reqwest::Method::GET, parsed_url)
         .map_err(|e| format!("SSRF policy: {e}"))?;
@@ -242,8 +243,8 @@ pub async fn fetch_provider_models(
     )
     .await
     .map_err(|_| "the provider's model list was too large or the connection broke".to_string())?;
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| "the provider returned a non-JSON model list".to_string())?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "the provider returned a non-JSON model list".to_string())?;
 
     let mut models: Vec<String> = if ptype == "gemini" {
         parsed["models"]

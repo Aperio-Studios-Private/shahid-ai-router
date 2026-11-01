@@ -511,7 +511,8 @@ function DeploymentsPanel({
     setFetching(true);
     setFetchError(null);
     try {
-      const list = await invokeOr<string[]>("fetch_provider_models", { providerId });
+      // Rust command param is `id` — Tauri matches invoke keys by name.
+      const list = await invokeOr<string[]>("fetch_provider_models", { id: providerId });
       setFetched(list ?? []);
       setModelQuery("");
       if (!modelForm.model_id && list && list.length > 0) {
