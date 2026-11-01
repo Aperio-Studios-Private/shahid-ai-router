@@ -93,11 +93,6 @@ pub fn run() {
             commands_settings::save_settings,
         ])
         .setup(|app| {
-            // Auto-open the web inspector (devtools feature is enabled in
-            // Cargo.toml) so console errors are visible for support.
-            if let Some(win) = app.get_webview_window("main") {
-                win.open_devtools();
-            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(err) = init_backend(handle).await {
