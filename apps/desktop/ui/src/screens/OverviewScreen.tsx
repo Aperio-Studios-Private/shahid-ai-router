@@ -3,17 +3,30 @@ import {
   Bot,
   Check,
   CloudUpload,
+  Copy,
   Globe,
   KeyRound,
   MessageSquare,
+  Plus,
   Rocket,
   Route,
   Server,
+  X,
 } from "lucide-react";
 import { invokeOr, type AppInfo } from "../lib/tauri";
 import type { ScreenId } from "../lib/screens";
 import { Spinner, Hint } from "../components/ui";
+import { PRESETS, familyFor } from "./ProvidersScreen";
 import type { LucideIcon } from "lucide-react";
+
+interface ModelInfoLite {
+  id: string;
+  streaming: boolean;
+  tool_calling: boolean;
+  vision: boolean;
+  structured_output: boolean;
+  context_window: number | null;
+}
 
 interface ProviderLite {
   id: string;
@@ -83,6 +96,90 @@ export function OverviewScreen({
   const [cloud, setCloud] = useState<CloudStatusLite | null>(null);
   const [gateway, setGateway] = useState<GatewayLite | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardPreset, setWizardPreset] = useState(0);
+  const [wizardKey, setWizardKey] = useState("");
+  const [wizardAlias, setWizardAlias] = useState("fast-model");
+  const [wizardBusy, setWizardBusy] = useState(false);
+  const [wizardLog, setWizardLog] = useState<string[]>([]);
+  const [wizardError, setWizardError] = useState<string | null>(null);
+
+  const runWizard = async () => {
+    const preset = PRESETS[wizardPreset];
+    setWizardBusy(true);
+    setWizardError(null);
+    setWizardLog([]);
+    const step = (line: string) => setWizardLog((l) => [...l, line]);
+    try {
+      if (!preset.allow_loopback && !wizardKey.trim()) {
+        throw "this provider needs an API key";
+      }
+      step(`Adding provider: ${preset.name}…`);
+      const providerId = await invokeOr<string>("add_provider", {
+        name: preset.name,
+        providerType: preset.provider_type,
+        baseUrl: preset.base_url,
+        allowLoopback: preset.allow_loopback,
+        notes: "Created by automatic setup",
+      });
+      if (!providerId) throw "bridge unavailable";
+      step("Storing API key in the OS vault…");
+      await invokeOr("add_credential", {
+        providerId,
+        label: "default",
+        secret: wizardKey.trim() || "local-no-key",
+        priority: 0,
+        weight: 1,
+      });
+      step("Fetching the live model catalogue…");
+      const models =
+        (await invokeOr<ModelInfoLite[]>("fetch_provider_models", { id: providerId })) ?? [];
+      if (models.length === 0) throw "the provider returned no models";
+      const pick =
+        models.find((m) =>
+          /nano|mini|small|8b|flash|instant|turbo|lite/i.test(m.id),
+        ) ?? models[0];
+      step(`Deploying ${pick.id}…`);
+      const modelPk = await invokeOr<string>("add_model", {
+        providerId,
+        modelId: pick.id,
+        protocolFamily: familyFor(preset.provider_type),
+        streaming: pick.streaming,
+        toolCalling: pick.tool_calling,
+        vision: pick.vision,
+        structuredOutput: pick.structured_output,
+        contextWindow: pick.context_window,
+      });
+      const depId = await invokeOr<string>("add_deployment", {
+        providerId,
+        modelPk,
+        endpointOverride: null,
+      });
+      step(`Creating alias "${wizardAlias}"…`);
+      const existing = (await invokeOr<{ id: string; alias: string }[]>("list_aliases", {})) ?? [];
+      const existingAlias = existing.find((a) => a.alias === wizardAlias);
+      const aliasId =
+        existingAlias ??
+        (await invokeOr<string>("add_alias", {
+          alias: wizardAlias,
+          description: "Created by automatic setup",
+        }));
+      if (!aliasId) throw "alias creation failed";
+      await invokeOr("bind_alias_deployment", {
+        aliasId,
+        deploymentId: depId,
+        priority: 10,
+      });
+      step("Done — the alias is live on the gateway ✓");
+      setWizardKey("");
+      await refresh();
+    } catch (err) {
+      setWizardError(String(err));
+    } finally {
+      setWizardBusy(false);
+    }
+  };
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -344,6 +441,142 @@ export function OverviewScreen({
           ))}
         </div>
       )}
+
+      {/* Connection block (#5): one-click copy of everything a tool needs */}
+      <div className={CARD + " mt-6"}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Connect any AI tool</h2>
+            <p className="mt-0.5 truncate font-mono text-xs text-zinc-500 dark:text-zinc-400">
+              {gateway?.addr ? `http://${gateway.addr}/v1` : "gateway not running"}
+            </p>
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              disabled={!gateway?.running}
+              className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium shadow-sm hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+              onClick={() => {
+                void invokeOr<string>("reveal_gateway_token", {}).then((token) => {
+                  const url = `http://${gateway?.addr ?? "127.0.0.1:8787"}/v1`;
+                  void navigator.clipboard
+                    .writeText(`Base URL: ${url}\nAPI key: ${token ?? "<reveal failed>"}`)
+                    .then(() => setCopied(true))
+                    .catch(() => setCopied(false));
+                  window.setTimeout(() => setCopied(false), 2000);
+                });
+              }}
+            >
+              <Copy size={12} aria-hidden="true" className="inline" />{" "}
+              {copied ? "Copied ✓" : "Copy URL + key"}
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("gateway")}
+              className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+            >
+              Gateway screen
+            </button>
+          </div>
+        </div>
+        <Hint>
+          “Copy URL + key” puts the base URL and gateway token on your clipboard —
+          paste into any AI tool's provider settings. The token never leaves this
+          Mac.
+        </Hint>
+      </div>
+
+      {/* Quick setup wizard (#1) */}
+      {wizardOpen && (
+        <div
+          className="palette-backdrop fixed inset-0 z-50 flex items-start justify-center pt-24"
+          onClick={() => setWizardOpen(false)}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-label="Quick setup"
+            className="rise w-[520px] max-w-[92vw] rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Automatic setup</h2>
+              <button type="button" aria-label="Close" onClick={() => setWizardOpen(false)}>
+                <X size={15} className="text-zinc-400" />
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              One flow: provider + key + model + alias, fully wired. Model chosen
+              automatically (prefers small/fast variants).
+            </p>
+            <label className="mt-3 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              Provider preset
+              <select
+                aria-label="Wizard provider preset"
+                value={wizardPreset}
+                onChange={(e) => setWizardPreset(Number(e.target.value))}
+                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+              >
+                {PRESETS.map((preset, i) => (
+                  <option key={preset.name} value={i}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mt-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              API key
+              <input
+                type="password"
+                aria-label="Wizard API key"
+                placeholder={PRESETS[wizardPreset]?.allow_loopback ? "optional for local servers" : "required"}
+                value={wizardKey}
+                onChange={(e) => setWizardKey(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+              />
+            </label>
+            <label className="mt-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              Alias name
+              <input
+                aria-label="Wizard alias name"
+                value={wizardAlias}
+                onChange={(e) => setWizardAlias(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-800"
+              />
+            </label>
+            {wizardLog.length > 0 && (
+              <ul className="mt-3 space-y-1 rounded-lg border border-zinc-100 bg-zinc-50 p-2 text-xs dark:border-zinc-800 dark:bg-zinc-800/60">
+                {wizardLog.map((line, i) => (
+                  <li key={i} className="text-zinc-600 dark:text-zinc-300">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {wizardError && (
+              <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">
+                {wizardError}
+              </p>
+            )}
+            <button
+              type="button"
+              disabled={wizardBusy}
+              onClick={() => void runWizard()}
+              className="mt-3 w-full rounded-lg bg-[#006eb9] px-4 py-2 text-sm font-medium text-white hover:bg-[#005c9b] disabled:opacity-40"
+            >
+              {wizardBusy ? "Setting up…" : "Set up automatically"}
+            </button>
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setWizardOpen(true)}
+        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#006eb9]/50 bg-[#006eb9]/5 px-4 py-3 text-sm font-medium text-[#006eb9] hover:bg-[#006eb9]/10 dark:border-sky-500/40 dark:bg-sky-500/5 dark:text-sky-300"
+      >
+        <Plus size={15} aria-hidden="true" />
+        Automatic setup: provider + key + model + alias in one flow
+      </button>
 
       {/* Architecture card */}
       <div className={CARD + " mt-6"}>

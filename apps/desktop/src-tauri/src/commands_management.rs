@@ -7,6 +7,7 @@ use std::time::Duration;
 use sair_providers::http::{SsrfPolicy, build_client};
 use sair_vault::{SecretBytes, SecretRef};
 use serde::Serialize;
+use serde_json::Value;
 use serde_json::json;
 use tauri::State;
 
@@ -177,7 +178,7 @@ pub async fn test_provider(
 pub async fn fetch_provider_models(
     state: State<'_, AppState>,
     id: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<ModelInfo>, String> {
     let repos = state.db.repos();
     let providers = repos.list_providers().await.map_err(|e| e.to_string())?;
     let Some(provider) = providers.iter().find(|p| p.id == id) else {
@@ -246,13 +247,23 @@ pub async fn fetch_provider_models(
     let parsed: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| "the provider returned a non-JSON model list".to_string())?;
 
-    let mut models: Vec<String> = if ptype == "gemini" {
+    // Auto-detect capabilities where the provider exposes them (Phase 15
+    // automation #3): OpenRouter exposes architecture/supported_parameters and
+    // context_length; other providers get safe chat defaults (streaming on).
+    let mut models: Vec<ModelInfo> = if ptype == "gemini" {
         parsed["models"]
             .as_array()
             .map(|a| {
                 a.iter()
                     .filter_map(|m| m["name"].as_str())
-                    .map(|n| n.strip_prefix("models/").unwrap_or(n).to_string())
+                    .map(|n| ModelInfo {
+                        id: n.strip_prefix("models/").unwrap_or(n).to_string(),
+                        streaming: true,
+                        tool_calling: false,
+                        vision: false,
+                        structured_output: false,
+                        context_window: None,
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -261,8 +272,37 @@ pub async fn fetch_provider_models(
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|m| m["id"].as_str())
-                    .map(str::to_string)
+                    .filter_map(|m: &Value| {
+                        Some((
+                            m["id"].as_str()?.to_string(),
+                            m["architecture"].clone(),
+                            m["supported_parameters"].clone(),
+                            m["context_length"].as_i64(),
+                        ))
+                    })
+                    .map(|(id, arch, supported, ctx)| {
+                        let params: Vec<String> = supported
+                            .as_array()
+                            .map(|ps| {
+                                ps.iter()
+                                    .filter_map(|p| p.as_str())
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        ModelInfo {
+                            id,
+                            streaming: true,
+                            tool_calling: params.iter().any(|p| p == "tools"),
+                            vision: arch["input_modalities"].as_array().is_some_and(|mods| {
+                                mods.iter().any(|v| v.as_str() == Some("image"))
+                            }),
+                            structured_output: params
+                                .iter()
+                                .any(|p| p == "response_format" || p == "structured_outputs"),
+                            context_window: ctx,
+                        }
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -273,9 +313,20 @@ pub async fn fetch_provider_models(
                 .to_string(),
         );
     }
-    models.sort();
-    models.dedup();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
     Ok(models)
+}
+
+/// A model from a provider's live catalogue, with auto-detected capabilities.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub streaming: bool,
+    pub tool_calling: bool,
+    pub vision: bool,
+    pub structured_output: bool,
+    pub context_window: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

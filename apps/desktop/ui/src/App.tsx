@@ -31,6 +31,7 @@ import { LogsScreen } from "./screens/LogsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { AboutScreen } from "./screens/AboutScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
+import { SettingsScreen } from "./screens/SettingsScreen";
 
 function useTheme(): [boolean, () => void] {
   const [dark, setDark] = useState<boolean>(() =>
@@ -271,6 +272,7 @@ export default function App() {
     if (active === "health") return <HealthScreen />;
     if (active === "backup") return <BackupScreen />;
     if (active === "about") return <AboutScreen appInfo={appInfo} />;
+    if (active === "settings") return <SettingsScreen />;
     return (
       <PlaceholderScreen
         title={SCREENS.find((s) => s.id === active)?.label ?? "Settings"}

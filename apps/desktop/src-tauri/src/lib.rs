@@ -13,6 +13,7 @@ mod commands;
 mod commands_cloud;
 mod commands_management;
 mod commands_rotation;
+mod commands_settings;
 mod profile_apply;
 mod state;
 mod telemetry;
@@ -88,6 +89,8 @@ pub fn run() {
             commands_cloud::cloud_restore,
             commands_cloud::cloud_commit,
             commands_cloud::cloud_disable,
+            commands_settings::get_public_settings,
+            commands_settings::save_settings,
         ])
         .setup(|app| {
             // Auto-open the web inspector (devtools feature is enabled in

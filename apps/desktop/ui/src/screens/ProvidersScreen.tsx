@@ -32,6 +32,15 @@ interface Credential {
   cooldown_until: string | null;
 }
 
+interface ModelInfo {
+  id: string;
+  streaming: boolean;
+  tool_calling: boolean;
+  vision: boolean;
+  structured_output: boolean;
+  context_window: number | null;
+}
+
 interface Deployment {
   id: string;
   model_id: string;
@@ -56,7 +65,7 @@ interface Preset {
   base_url: string;
   allow_loopback: boolean;
 }
-const PRESETS: Preset[] = [
+export const PRESETS: Preset[] = [
   { name: "NVIDIA NIM (hosted)", provider_type: "openai_compatible", base_url: "https://integrate.api.nvidia.com/v1", allow_loopback: false },
   { name: "OpenAI", provider_type: "openai", base_url: "https://api.openai.com/v1", allow_loopback: false },
   { name: "Anthropic", provider_type: "anthropic", base_url: "https://api.anthropic.com", allow_loopback: false },
@@ -73,7 +82,7 @@ const PRESETS: Preset[] = [
 ];
 
 /** Provider type → the deployment protocol family its models speak. */
-function familyFor(providerType: string): string {
+export function familyFor(providerType: string): string {
   if (providerType === "anthropic") return "anthropic_messages";
   if (providerType === "gemini") return "gemini_generate_content";
   return "openai_chat";
@@ -565,7 +574,8 @@ function DeploymentsPanel({
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [modelForm, setModelForm] = useState({ model_id: "", protocol_family: "openai_chat" });
-  const [fetched, setFetched] = useState<string[] | null>(null);
+  const [fetched, setFetched] = useState<ModelInfo[] | null>(null);
+  const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
@@ -575,12 +585,10 @@ function DeploymentsPanel({
     setFetchError(null);
     try {
       // Rust command param is `id` — Tauri matches invoke keys by name.
-      const list = await invokeOr<string[]>("fetch_provider_models", { id: providerId });
+      const list = await invokeOr<ModelInfo[]>("fetch_provider_models", { id: providerId });
       setFetched(list ?? []);
       setModelQuery("");
-      if (!modelForm.model_id && list && list.length > 0) {
-        setModelForm((f) => ({ ...f, model_id: list[0] }));
-      }
+      setAddedIds(new Set());
     } catch (err) {
       setFetchError(String(err));
     } finally {
@@ -589,7 +597,7 @@ function DeploymentsPanel({
   };
 
   const filteredModels = (fetched ?? []).filter((m) =>
-    m.toLowerCase().includes(modelQuery.trim().toLowerCase()),
+    m.id.toLowerCase().includes(modelQuery.trim().toLowerCase()),
   );
 
   const refresh = useCallback(async () => {
@@ -689,7 +697,7 @@ function DeploymentsPanel({
             <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-800">
               <Search size={13} className="text-zinc-400" aria-hidden="true" />
               <input
-                placeholder={`Search ${fetched.length} models…`}
+                placeholder={`Search ${fetched.length} models — click one to deploy it…`}
                 aria-label="Search models"
                 value={modelQuery}
                 onChange={(e) => setModelQuery(e.target.value)}
@@ -701,21 +709,50 @@ function DeploymentsPanel({
                 <li className="px-2 py-2 text-xs text-zinc-400">No models match “{modelQuery}”</li>
               )}
               {filteredModels.map((m) => (
-                <li key={m}>
+                <li key={m.id}>
                   <button
                     type="button"
-                    onClick={() => setModelForm((f) => ({ ...f, model_id: m }))}
+                    disabled={busy}
+                    title="Click to deploy this model (one click — capabilities auto-filled)"
+                    onClick={() =>
+                      void run(async () => {
+                        const modelPk = await invokeOr<string>("add_model", {
+                          providerId,
+                          modelId: m.id,
+                          protocolFamily: modelForm.protocol_family,
+                          streaming: m.streaming,
+                          toolCalling: m.tool_calling,
+                          vision: m.vision,
+                          structuredOutput: m.structured_output,
+                          contextWindow: m.context_window,
+                        });
+                        await invokeOr("add_deployment", {
+                          providerId,
+                          modelPk,
+                          endpointOverride: null,
+                        });
+                        setAddedIds((prev) => new Set(prev).add(m.id));
+                        setModelForm((f) => ({ ...f, model_id: m.id }));
+                      })
+                    }
                     className={
-                      "flex w-full items-center justify-between rounded-md px-2 py-1 text-left font-mono text-xs " +
-                      (modelForm.model_id === m
-                        ? "bg-[#006eb9]/10 text-[#006eb9] dark:bg-sky-500/10 dark:text-sky-300"
+                      "flex w-full items-center justify-between rounded-md px-2 py-1 text-left font-mono text-xs disabled:opacity-50 " +
+                      (addedIds.has(m.id)
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
                         : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800")
                     }
                   >
-                    <span className="truncate">{m}</span>
-                    {modelForm.model_id === m && (
-                      <span className="shrink-0 text-[10px] uppercase tracking-wide">selected</span>
-                    )}
+                    <span className="truncate">{m.id}</span>
+                    <span className="flex shrink-0 items-center gap-1 text-[10px] font-sans">
+                      {m.vision && <span className="rounded bg-violet-100 px-1 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">vision</span>}
+                      {m.tool_calling && <span className="rounded bg-sky-100 px-1 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">tools</span>}
+                      {m.context_window !== null && (
+                        <span className="text-zinc-400">{Math.round(m.context_window / 1024)}k</span>
+                      )}
+                      {addedIds.has(m.id && m.id) || addedIds.has(m.id) ? (
+                        <span className="font-medium text-emerald-600 dark:text-emerald-400">deployed ✓</span>
+                      ) : null}
+                    </span>
                   </button>
                 </li>
               ))}
