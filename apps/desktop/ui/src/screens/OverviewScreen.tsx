@@ -104,6 +104,7 @@ export function OverviewScreen({
   const [wizardBusy, setWizardBusy] = useState(false);
   const [wizardLog, setWizardLog] = useState<string[]>([]);
   const [wizardError, setWizardError] = useState<string | null>(null);
+  const [wizardProfile, setWizardProfile] = useState<string | null>(null);
 
   const runWizard = async () => {
     const preset = PRESETS[wizardPreset];
@@ -172,6 +173,24 @@ export function OverviewScreen({
         priority: 10,
       });
       step("Done — the alias is live on the gateway ✓");
+      try {
+        const gw = await invokeOr<{ addr: string | null }>("get_gateway_state", {});
+        const addr = gw?.addr ?? "127.0.0.1:8787";
+        const profile = await invokeOr<{ config_text: string }>("generate_agent_profile", {
+          agentId: "claude-code",
+          alias: wizardAlias,
+          fastAlias: null,
+        });
+        setWizardProfile(
+          (profile?.config_text ?? "").replaceAll(
+            "<<GATEWAY_TOKEN>>",
+            "<reveal token on the Local Gateway screen>",
+          ) + `\n# base URL: http://${addr}`,
+        );
+        step("Claude Code config generated — copy it below, or use Agent Integrations to apply it to the file directly.");
+      } catch {
+        step("(agent profile generation skipped — use Agent Integrations)");
+      }
       setWizardKey("");
       await refresh();
     } catch (err) {
@@ -558,13 +577,62 @@ export function OverviewScreen({
                 {wizardError}
               </p>
             )}
+            {wizardProfile && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    Ready — paste into ~/.claude/settings.json (or use Agent Integrations for a consent-gated file apply):
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(wizardProfile).then(
+                        () => setWizardError(null),
+                      );
+                      setWizardLog((l) => [...l, "Config copied to clipboard ✓"]);
+                    }}
+                    className="rounded border border-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    Copy config
+                  </button>
+                </div>
+                <pre className="mt-1 max-h-32 overflow-auto rounded-md bg-zinc-100 p-2 font-mono text-[10px] dark:bg-zinc-800">
+                  {wizardProfile}
+                </pre>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardOpen(false);
+                      onNavigate("backup");
+                    }}
+                    className="rounded border border-zinc-200 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    Next: enable cloud backup →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardOpen(false);
+                      onNavigate("agent-integrations");
+                    }}
+                    className="rounded border border-zinc-200 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+                  >
+                    Apply to file directly →
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               type="button"
               disabled={wizardBusy}
-              onClick={() => void runWizard()}
+              onClick={() => {
+                setWizardProfile(null);
+                void runWizard();
+              }}
               className="mt-3 w-full rounded-lg bg-[#006eb9] px-4 py-2 text-sm font-medium text-white hover:bg-[#005c9b] disabled:opacity-40"
             >
-              {wizardBusy ? "Setting up…" : "Set up automatically"}
+              {wizardBusy ? "Setting up…" : wizardProfile ? "Set up another provider" : "Set up automatically"}
             </button>
           </div>
         </div>
