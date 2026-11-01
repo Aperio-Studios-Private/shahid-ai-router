@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  Bot,
+  Check,
+  CloudUpload,
+  Globe,
+  KeyRound,
+  MessageSquare,
+  Rocket,
+  Route,
+  Server,
+} from "lucide-react";
 import { invokeOr, type AppInfo } from "../lib/tauri";
 import type { ScreenId } from "../lib/screens";
 import { Spinner, Hint } from "../components/ui";
+import type { LucideIcon } from "lucide-react";
 
 interface ProviderLite {
   id: string;
@@ -27,14 +39,14 @@ interface GatewayLite {
   addr: string | null;
 }
 
-/** Visual icon chip: colored rounded square + emoji (no new deps). */
-function IconChip({ icon, tone }: { icon: string; tone: string }) {
+/** Visual icon chip: tinted rounded square + Lucide icon. */
+function IconChip({ icon: Icon, tone }: { icon: LucideIcon; tone: string }) {
   return (
     <span
       aria-hidden="true"
-      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg shadow-sm ${tone}`}
+      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm ${tone}`}
     >
-      {icon}
+      <Icon size={18} strokeWidth={1.8} />
     </span>
   );
 }
@@ -119,7 +131,7 @@ export function OverviewScreen({
 
   const steps = [
     {
-      icon: "🗂️",
+      icon: Server,
       tone: TONES.blue,
       title: "Add a provider",
       why: "Connect OpenAI, Anthropic, Gemini, NVIDIA NIM, OpenRouter or a local server (Ollama, LM Studio…).",
@@ -128,7 +140,7 @@ export function OverviewScreen({
       doneLabel: `${providers?.length ?? 0} added`,
     },
     {
-      icon: "🔑",
+      icon: KeyRound,
       tone: TONES.green,
       title: "Add an API key",
       why: "Keys go straight into your Mac's Keychain — never in the database, never logged.",
@@ -137,7 +149,7 @@ export function OverviewScreen({
       doneLabel: `${credentialCount ?? 0} in the vault`,
     },
     {
-      icon: "🚀",
+      icon: Rocket,
       tone: TONES.violet,
       title: "Deploy a model",
       why: "Point the router at an upstream model (gpt-4o, meta/llama-3.1-8b-instruct…) so it knows what to call.",
@@ -146,7 +158,7 @@ export function OverviewScreen({
       doneLabel: `${deployments?.length ?? 0} deployed`,
     },
     {
-      icon: "🔀",
+      icon: Route,
       tone: TONES.amber,
       title: "Route an alias",
       why: "Give your tools one stable name (\"fast-model\") and a fallback order for when a provider fails.",
@@ -155,7 +167,7 @@ export function OverviewScreen({
       doneLabel: `${aliases?.length ?? 0} routed`,
     },
     {
-      icon: "💬",
+      icon: MessageSquare,
       tone: TONES.rose,
       title: "Send a test request",
       why: "Point Claude Code / Gemini CLI / curl at http://127.0.0.1:8787 with the token from the Gateway screen.",
@@ -164,7 +176,7 @@ export function OverviewScreen({
       doneLabel: `${requestCount ?? 0} request(s) so far`,
     },
     {
-      icon: "☁️",
+      icon: CloudUpload,
       tone: TONES.zinc,
       title: "Cloud backup",
       why: "Snapshots your setup to your own free Neon/Supabase project — restore on any Mac in two clicks.",
@@ -174,7 +186,7 @@ export function OverviewScreen({
       optional: true,
     },
     {
-      icon: "🤖",
+      icon: Bot,
       tone: TONES.blue,
       title: "Connect an AI agent",
       why: "Generate a ready-made config for Claude Code, Gemini CLI or any OpenAI-compatible client.",
@@ -191,16 +203,16 @@ export function OverviewScreen({
 
   const stats = [
     {
-      icon: "🌐",
+      icon: Globe,
       tone: gateway?.running ? TONES.green : TONES.zinc,
       label: "Gateway",
       value: gateway === null ? "…" : gateway.running ? "Running" : "Stopped",
       sub: gateway?.addr ?? "127.0.0.1:8787",
       screen: "gateway" as ScreenId,
     },
-    { icon: "🗂️", tone: TONES.blue, label: "Providers", value: String(providers?.length ?? 0), sub: `${providers?.filter((p) => p.enabled).length ?? 0} enabled`, screen: "providers" as ScreenId },
-    { icon: "🔑", tone: TONES.green, label: "Keys", value: String(credentialCount ?? 0), sub: "in OS vault", screen: "providers" as ScreenId },
-    { icon: "💬", tone: TONES.violet, label: "Requests", value: requestCount === null ? "…" : String(requestCount), sub: "recent (of all history)", screen: "activity" as ScreenId },
+    { icon: Server, tone: TONES.blue, label: "Providers", value: String(providers?.length ?? 0), sub: `${providers?.filter((p) => p.enabled).length ?? 0} enabled`, screen: "providers" as ScreenId },
+    { icon: KeyRound, tone: TONES.green, label: "Keys", value: String(credentialCount ?? 0), sub: "in OS vault", screen: "providers" as ScreenId },
+    { icon: MessageSquare, tone: TONES.violet, label: "Requests", value: requestCount === null ? "…" : String(requestCount), sub: "recent (of all history)", screen: "activity" as ScreenId },
   ];
 
   return (
@@ -220,11 +232,22 @@ export function OverviewScreen({
           </div>
           <span
             className={
-              "rounded-full px-3 py-1 text-xs font-medium shadow-sm " +
+              "flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium shadow-sm " +
               (gateway?.running ? "bg-emerald-400/90 text-emerald-950" : "bg-white/25 text-white")
             }
           >
-            {gateway === null ? "…" : gateway.running ? "● Gateway running" : "○ Gateway stopped"}
+            <span
+              aria-hidden="true"
+              className={
+                "h-1.5 w-1.5 rounded-full " +
+                (gateway === null ? "bg-white/50" : gateway.running ? "bg-emerald-700" : "bg-white/60")
+              }
+            />
+            {gateway === null
+              ? "…"
+              : gateway.running
+                ? "Gateway running"
+                : "Gateway stopped"}
           </span>
         </div>
       </div>
@@ -300,8 +323,8 @@ export function OverviewScreen({
                       )}
                     </p>
                     {s.done && (
-                      <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                        ✓ {s.doneLabel}
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                        <Check size={10} strokeWidth={3} /> {s.doneLabel}
                       </span>
                     )}
                   </div>

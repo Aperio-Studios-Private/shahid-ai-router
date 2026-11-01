@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invokeOr } from "../lib/tauri";
 import { Tooltip } from "../components/ui";
+import { Copy, Power, RotateCcw } from "lucide-react";
 
 interface GatewayState {
   running: boolean;
@@ -146,7 +147,7 @@ export function GatewayScreen() {
           onClick={() => void start()}
           className="rounded-md bg-[#006eb9] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#005c9b] disabled:opacity-40"
         >
-          Start
+          <Power size={13} aria-hidden="true" /> Start
         </button>
         <button
           type="button"
@@ -154,7 +155,7 @@ export function GatewayScreen() {
           onClick={() => void stop()}
           className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
-          Stop
+          <Power size={13} aria-hidden="true" /> Stop
         </button>
       </div>
 
@@ -179,7 +180,7 @@ export function GatewayScreen() {
           onClick={() => void copy()}
           className="rounded-md border border-zinc-300 px-3 py-2 text-xs hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
-          Copy
+          <Copy size={13} aria-hidden="true" /> Copy
         </button>
       </div>
       <button
@@ -187,7 +188,7 @@ export function GatewayScreen() {
         onClick={() => void regenerate()}
         className="mt-3 rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
       >
-        Regenerate token…
+        <RotateCcw size={12} aria-hidden="true" /> Regenerate token…
       </button>
     </section>
   );

@@ -1,10 +1,33 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
 
 /* Class-based dark mode (docs/08: light/dark themes, no color-only status) */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Design tokens (Phase 15 — product pass): Inter typography + a cooler,
+ * layered neutral scale mapped onto the zinc-* utilities so every screen
+ * re-skins at once. Dark mode uses true layered surfaces, not flat gray.
+ */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-zinc-50: oklch(0.985 0.002 250);
+  --color-zinc-100: oklch(0.966 0.003 250);
+  --color-zinc-200: oklch(0.906 0.004 250);
+  --color-zinc-300: oklch(0.83 0.005 250);
+  --color-zinc-400: oklch(0.686 0.006 250);
+  --color-zinc-500: oklch(0.556 0.007 250);
+  --color-zinc-600: oklch(0.445 0.007 250);
+  --color-zinc-700: oklch(0.336 0.006 250);
+  --color-zinc-800: oklch(0.245 0.005 250);
+  --color-zinc-900: oklch(0.172 0.005 250);
+  --color-zinc-950: oklch(0.128 0.004 250);
+}
+
 :root {
   color-scheme: light dark;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11"; /* Inter: nicer 1/l/i */
 }
 
 html,
@@ -14,7 +37,32 @@ body,
 }
 
 body {
-  @apply bg-zinc-50 text-zinc-900 antialiased;
+  @apply bg-zinc-100 text-zinc-900 antialiased;
+  font-family: var(--font-sans);
+  letter-spacing: -0.006em;
+}
+
+/* Real-app feel #1: thin, unobtrusive scrollbars (macOS overlay style) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-zinc-300) transparent;
+}
+.dark * {
+  scrollbar-color: var(--color-zinc-700) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-zinc-300);
+  border-radius: 8px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--color-zinc-700);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* docs/08: visible focus for keyboard navigation */
@@ -27,4 +75,25 @@ select:focus-visible,
 
 .dark body {
   @apply bg-zinc-950 text-zinc-100;
+}
+
+/* Subtle entrance for panes/cards — micro-motion without animation libs */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 0.18s ease-out both;
+}
+
+/* Dialog backdrop for the command palette */
+.palette-backdrop {
+  background: color-mix(in oklab, black 32%, transparent);
+  backdrop-filter: blur(2px);
 }
