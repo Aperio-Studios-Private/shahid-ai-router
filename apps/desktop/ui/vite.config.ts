@@ -8,6 +8,13 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
+  // WKWebView on older macOS (Monterey = Safari 15/16) cannot parse Vite 8's
+  // default 'baseline-widely-available' output — the bundle fails to parse and
+  // the window renders white (observed 2026-11-01). es2020 is safely within
+  // every supported macOS (12+).
+  build: {
+    target: "es2020",
+  },
   server: {
     port: 5173,
     strictPort: true,

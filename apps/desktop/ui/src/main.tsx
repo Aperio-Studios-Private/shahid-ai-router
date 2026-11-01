@@ -43,9 +43,16 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-// Top-level (outside React) failures — module load errors etc. — paint the
-// same overlay into #root so a white window can never hide the cause.
-window.addEventListener("error", (event) => {
+// Top-level (outside React) failures — module load/parse errors etc. — paint
+// the same overlay into #root so a white window can never hide the cause.
+// CAPTURE phase is mandatory: module <script> failures fire on the element
+// and do NOT bubble to window without it (this was the white-screen blind
+// spot).
+window.addEventListener("error", reportFatal, true);
+window.addEventListener("unhandledrejection", (event) => {
+  reportFatal({ message: String(event.reason ?? "unhandled rejection") } as unknown as ErrorEvent);
+});
+function reportFatal(event: ErrorEvent) {
   const root = document.getElementById("root");
   if (!root || root.childElementCount > 0) return; // React boundary handles in-app errors
   const msg = event.message || String(event.error ?? "unknown script error");
@@ -55,7 +62,7 @@ window.addEventListener("error", (event) => {
     '<pre style="white-space:pre-wrap;margin-top:12px;background:#f4f4f5;padding:12px;border-radius:8px">' +
     msg.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] ?? c) +
     "</pre></div>";
-});
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
