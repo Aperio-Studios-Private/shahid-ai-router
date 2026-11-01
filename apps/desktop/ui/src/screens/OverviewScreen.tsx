@@ -10,38 +10,51 @@ interface ProviderLite {
 }
 interface CredentialLite {
   id: string;
-  label: string;
-  status: string;
 }
 interface DeploymentLite {
   id: string;
-  enabled: boolean;
 }
 interface AliasLite {
   id: string;
-  alias: string;
   model_ids: string[];
 }
 interface CloudStatusLite {
   configured: boolean;
   provider: string | null;
 }
-
-interface Step {
-  n: number;
-  title: string;
-  why: string;
-  screen: ScreenId;
-  done: boolean;
-  doneLabel: string;
-  optional?: boolean;
+interface GatewayLite {
+  running: boolean;
+  addr: string | null;
 }
 
+/** Visual icon chip: colored rounded square + emoji (no new deps). */
+function IconChip({ icon, tone }: { icon: string; tone: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg shadow-sm ${tone}`}
+    >
+      {icon}
+    </span>
+  );
+}
+
+const TONES = {
+  blue: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
+  green: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+  violet: "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300",
+  amber: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+  rose: "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
+  zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-500/15 dark:text-zinc-300",
+};
+
+const CARD =
+  "rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900";
+
 /**
- * Home (Phase 13): a live "Get started" checklist instead of static text.
- * Progress is derived from real app data, so the list updates as steps are
- * completed (research: setup checklists maintain momentum; empty states must
- * teach and offer one clear next action).
+ * Home (Phase 14): card-based redesign — a status card row, the guided setup
+ * as visual step cards, and quick-action cards (research: setup checklists +
+ * teaching empty states; cards give each item one clear job and CTA).
  */
 export function OverviewScreen({
   appInfo,
@@ -54,8 +67,9 @@ export function OverviewScreen({
   const [credentialCount, setCredentialCount] = useState<number | null>(null);
   const [deployments, setDeployments] = useState<DeploymentLite[] | null>(null);
   const [aliases, setAliases] = useState<AliasLite[] | null>(null);
-  const [hasRequests, setHasRequests] = useState<boolean | null>(null);
+  const [requestCount, setRequestCount] = useState<number | null>(null);
   const [cloud, setCloud] = useState<CloudStatusLite | null>(null);
+  const [gateway, setGateway] = useState<GatewayLite | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -67,28 +81,26 @@ export function OverviewScreen({
       const allDeployments: DeploymentLite[] = [];
       for (const p of provs) {
         const creds =
-          (await invokeOr<CredentialLite[]>("list_credentials", {
-            providerId: p.id,
-          })) ?? [];
+          (await invokeOr<CredentialLite[]>("list_credentials", { providerId: p.id })) ?? [];
         credCount += creds.length;
         const deps =
-          (await invokeOr<DeploymentLite[]>("list_deployments", {
-            providerId: p.id,
-          })) ?? [];
+          (await invokeOr<DeploymentLite[]>("list_deployments", { providerId: p.id })) ?? [];
         allDeployments.push(...deps);
       }
       setCredentialCount(credCount);
       setDeployments(allDeployments);
       const als = (await invokeOr<AliasLite[]>("list_aliases", {})) ?? [];
       setAliases(als);
-      const records = await invokeOr<unknown[]>("list_request_records", {
-        limit: 1,
+      const records = (await invokeOr<unknown[]>("list_request_records", {
+        limit: 100,
         aliasFilter: null,
         errorsOnly: false,
-      });
-      setHasRequests((records?.length ?? 0) > 0);
+      })) ?? [];
+      setRequestCount(records.length);
       const cs = await invokeOr<CloudStatusLite>("cloud_status", {});
       if (cs) setCloud(cs);
+      const gw = await invokeOr<GatewayLite>("get_gateway_state", {});
+      if (gw) setGateway(gw);
     } catch (err) {
       setError(String(err));
     }
@@ -102,69 +114,73 @@ export function OverviewScreen({
   const keyDone = (credentialCount ?? 0) > 0;
   const deploymentDone = (deployments?.length ?? 0) > 0;
   const aliasDone = (aliases ?? []).some((a) => a.model_ids.length > 0);
-  const requestDone = hasRequests === true;
+  const requestDone = (requestCount ?? 0) > 0;
   const cloudDone = cloud?.configured === true;
 
-  const steps: Step[] = [
+  const steps = [
     {
-      n: 1,
+      icon: "🗂️",
+      tone: TONES.blue,
       title: "Add a provider",
-      why: "Where should the router send AI requests? Add OpenAI, Anthropic, Gemini, NVIDIA NIM, OpenRouter, or any OpenAI-compatible server (Ollama, LM Studio, vLLM…).",
-      screen: "providers",
+      why: "Connect OpenAI, Anthropic, Gemini, NVIDIA NIM, OpenRouter or a local server (Ollama, LM Studio…).",
+      screen: "providers" as ScreenId,
       done: providerDone,
-      doneLabel:
-        providers && providers.length > 0
-          ? `${providers.length} provider${providers.length > 1 ? "s" : ""} added`
-          : "",
+      doneLabel: `${providers?.length ?? 0} added`,
     },
     {
-      n: 2,
+      icon: "🔑",
+      tone: TONES.green,
       title: "Add an API key",
-      why: "Keys are stored in your Mac's Keychain — never in the app database, never logged, never sent anywhere except the provider you chose.",
-      screen: "providers",
+      why: "Keys go straight into your Mac's Keychain — never in the database, never logged.",
+      screen: "providers" as ScreenId,
       done: keyDone,
-      doneLabel: keyDone ? `${credentialCount} key(s) in the vault` : "",
+      doneLabel: `${credentialCount ?? 0} in the vault`,
     },
     {
-      n: 3,
+      icon: "🚀",
+      tone: TONES.violet,
       title: "Deploy a model",
-      why: "A deployment connects one upstream model (e.g. gpt-4o, meta/llama-3.1-8b-instruct) to its provider, so the router knows what it can call.",
-      screen: "providers",
+      why: "Point the router at an upstream model (gpt-4o, meta/llama-3.1-8b-instruct…) so it knows what to call.",
+      screen: "providers" as ScreenId,
       done: deploymentDone,
-      doneLabel: deploymentDone ? `${deployments?.length} model(s) deployed` : "",
+      doneLabel: `${deployments?.length ?? 0} deployed`,
     },
     {
-      n: 4,
-      title: "Create an alias and bind the deployment",
-      why: "The alias is the stable model name your AI tools use (e.g. \"fast-model\"). Bindings decide the fallback order when a provider fails.",
-      screen: "routing",
+      icon: "🔀",
+      tone: TONES.amber,
+      title: "Route an alias",
+      why: "Give your tools one stable name (\"fast-model\") and a fallback order for when a provider fails.",
+      screen: "routing" as ScreenId,
       done: aliasDone,
-      doneLabel: aliasDone ? `${aliases?.length} alias(es) routed` : "",
+      doneLabel: `${aliases?.length ?? 0} routed`,
     },
     {
-      n: 5,
+      icon: "💬",
+      tone: TONES.rose,
       title: "Send a test request",
-      why: "AI coding agents (Claude Code, Gemini CLI, Codex…) point at this machine's gateway: http://127.0.0.1:8787 — get the token on the Local Gateway screen.",
-      screen: "gateway",
+      why: "Point Claude Code / Gemini CLI / curl at http://127.0.0.1:8787 with the token from the Gateway screen.",
+      screen: "gateway" as ScreenId,
       done: requestDone,
-      doneLabel: requestDone ? "Requests are flowing — see Activity" : "",
+      doneLabel: `${requestCount ?? 0} request(s) so far`,
     },
     {
-      n: 6,
-      title: "Generate an agent profile",
-      why: "One click writes the correct environment/config for Claude Code, Gemini CLI or any OpenAI-compatible client — consent-gated, with an automatic backup of the file.",
-      screen: "agent-integrations",
-      done: false,
-      doneLabel: "",
+      icon: "☁️",
+      tone: TONES.zinc,
+      title: "Cloud backup",
+      why: "Snapshots your setup to your own free Neon/Supabase project — restore on any Mac in two clicks.",
+      screen: "backup" as ScreenId,
+      done: cloudDone,
+      doneLabel: cloudDone ? `Synced to ${cloud?.provider}` : "Optional",
       optional: true,
     },
     {
-      n: 7,
-      title: "Turn on cloud backup",
-      why: "Snapshots your whole setup to your own free Neon/Supabase project daily (and after changes) — restore on a new Mac in two clicks.",
-      screen: "backup",
-      done: cloudDone,
-      doneLabel: cloudDone ? `Synced to ${cloud?.provider}` : "",
+      icon: "🤖",
+      tone: TONES.blue,
+      title: "Connect an AI agent",
+      why: "Generate a ready-made config for Claude Code, Gemini CLI or any OpenAI-compatible client.",
+      screen: "agent-integrations" as ScreenId,
+      done: false,
+      doneLabel: "Optional",
       optional: true,
     },
   ];
@@ -173,23 +189,44 @@ export function OverviewScreen({
   const requiredDone = required.filter((s) => s.done).length;
   const allDone = requiredDone === required.length;
 
+  const stats = [
+    {
+      icon: "🌐",
+      tone: gateway?.running ? TONES.green : TONES.zinc,
+      label: "Gateway",
+      value: gateway === null ? "…" : gateway.running ? "Running" : "Stopped",
+      sub: gateway?.addr ?? "127.0.0.1:8787",
+      screen: "gateway" as ScreenId,
+    },
+    { icon: "🗂️", tone: TONES.blue, label: "Providers", value: String(providers?.length ?? 0), sub: `${providers?.filter((p) => p.enabled).length ?? 0} enabled`, screen: "providers" as ScreenId },
+    { icon: "🔑", tone: TONES.green, label: "Keys", value: String(credentialCount ?? 0), sub: "in OS vault", screen: "providers" as ScreenId },
+    { icon: "💬", tone: TONES.violet, label: "Requests", value: requestCount === null ? "…" : String(requestCount), sub: "recent (of all history)", screen: "activity" as ScreenId },
+  ];
+
   return (
-    <section className="max-w-3xl">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold">Welcome to Shahid AI Router</h1>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
-            One local, authenticated endpoint for all your AI providers. Your AI
-            coding agents talk to this app; the app picks a working provider,
-            rotates keys on failures, and keeps your keys in the macOS Keychain.
-            {appInfo ? ` (v${appInfo.version})` : ""}
-          </p>
-        </div>
-        {allDone && (
-          <span className="rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
-            ✓ Setup complete
+    <section className="max-w-4xl">
+      {/* Header card */}
+      <div className="rounded-2xl border border-zinc-200 bg-gradient-to-br from-[#006eb9] to-sky-500 p-5 text-white shadow-md dark:border-zinc-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold">
+              Shahid AI Router {appInfo ? <span className="text-sm font-normal opacity-80">v{appInfo.version}</span> : null}
+            </h1>
+            <p className="mt-1 max-w-2xl text-sm text-white/85">
+              One local, authenticated endpoint for all your AI providers. Your
+              AI coding agents talk to this app — it picks a working provider,
+              rotates keys on failures, and keeps secrets in the macOS Keychain.
+            </p>
+          </div>
+          <span
+            className={
+              "rounded-full px-3 py-1 text-xs font-medium shadow-sm " +
+              (gateway?.running ? "bg-emerald-400/90 text-emerald-950" : "bg-white/25 text-white")
+            }
+          >
+            {gateway === null ? "…" : gateway.running ? "● Gateway running" : "○ Gateway stopped"}
           </span>
-        )}
+        </div>
       </div>
 
       {error && (
@@ -201,75 +238,94 @@ export function OverviewScreen({
         </p>
       )}
 
-      <div className="mt-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Get started</h2>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400">
-          {requiredDone}/{required.length} required steps
-        </span>
+      {/* Stat cards */}
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {stats.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            onClick={() => onNavigate(s.screen)}
+            className={CARD + " text-left hover:border-[#006eb9]/40"}
+          >
+            <div className="flex items-center gap-2">
+              <IconChip icon={s.icon} tone={s.tone} />
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{s.label}</p>
+                <p className="text-lg font-semibold leading-tight">{s.value}</p>
+              </div>
+            </div>
+            <p className="mt-2 truncate text-xs text-zinc-500 dark:text-zinc-400">{s.sub}</p>
+          </button>
+        ))}
       </div>
 
+      {/* Setup checklist */}
+      <div className="mt-6 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Get started</h2>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+          {requiredDone}/{required.length} required ·{" "}
+          {allDone ? (
+            <span className="font-medium text-emerald-600 dark:text-emerald-400">complete ✓</span>
+          ) : (
+            "finish the required cards"
+          )}
+        </span>
+      </div>
       {providers === null ? (
         <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
           <Spinner /> Checking your setup…
         </div>
       ) : (
-        <ol className="mt-2 space-y-2">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {steps.map((s) => (
-            <li
-              key={s.n}
+            <div
+              key={s.title}
               className={
-                "rounded-lg border p-3 " +
+                CARD +
                 (s.done
-                  ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-950/30"
-                  : "border-zinc-200 dark:border-zinc-800")
+                  ? " border-emerald-300/70 bg-emerald-50/40 dark:border-emerald-800/60 dark:bg-emerald-950/20"
+                  : "")
               }
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">
-                    <span
-                      aria-hidden="true"
-                      className={
-                        "mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-semibold " +
-                        (s.done
-                          ? "bg-emerald-600 text-white"
-                          : "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300")
-                      }
-                    >
-                      {s.done ? "✓" : s.n}
-                    </span>
-                    {s.title}
-                    {s.optional && (
-                      <span className="ml-2 rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:border-zinc-700">
-                        optional
+              <div className="flex items-start gap-3">
+                <IconChip icon={s.icon} tone={s.tone} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">
+                      {s.title}
+                      {s.optional && (
+                        <span className="ml-2 rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wide text-zinc-500 dark:border-zinc-700">
+                          optional
+                        </span>
+                      )}
+                    </p>
+                    {s.done && (
+                      <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                        ✓ {s.doneLabel}
                       </span>
                     )}
-                  </p>
+                  </div>
                   <Hint>{s.why}</Hint>
-                  {s.done && s.doneLabel && (
-                    <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                      ✓ {s.doneLabel}
-                    </p>
+                  {!s.done && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate(s.screen)}
+                      className="mt-2 rounded-md bg-[#006eb9] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#005c9b]"
+                    >
+                      {s.title.startsWith("Send") ? "Get the token" : "Do it"}
+                    </button>
                   )}
                 </div>
-                {!s.done && (
-                  <button
-                    type="button"
-                    onClick={() => onNavigate(s.screen)}
-                    className="shrink-0 rounded-md bg-[#006eb9] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#005c9b]"
-                  >
-                    {s.n === 5 ? "Get the token" : "Do it"}
-                  </button>
-                )}
               </div>
-            </li>
+            </div>
           ))}
-        </ol>
+        </div>
       )}
 
-      <div className="mt-6 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      {/* Architecture card */}
+      <div className={CARD + " mt-6"}>
         <h2 className="text-sm font-semibold">How it works, in one picture</h2>
-        <pre className="mt-2 overflow-x-auto rounded-md bg-zinc-100 p-3 text-xs leading-relaxed dark:bg-zinc-900">
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-zinc-100 p-3 text-xs leading-relaxed dark:bg-zinc-900">
 {`Claude Code / Gemini CLI / curl
         │  http://127.0.0.1:8787  (token-authenticated, Mac-local only)
         ▼
