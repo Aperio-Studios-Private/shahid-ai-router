@@ -49,6 +49,36 @@ const BTN_DANGER =
 const INPUT =
   "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800";
 
+/** Well-known provider presets (Phase 15): base URL + type prefilled. */
+interface Preset {
+  name: string;
+  provider_type: string;
+  base_url: string;
+  allow_loopback: boolean;
+}
+const PRESETS: Preset[] = [
+  { name: "NVIDIA NIM (hosted)", provider_type: "openai_compatible", base_url: "https://integrate.api.nvidia.com/v1", allow_loopback: false },
+  { name: "OpenAI", provider_type: "openai", base_url: "https://api.openai.com/v1", allow_loopback: false },
+  { name: "Anthropic", provider_type: "anthropic", base_url: "https://api.anthropic.com", allow_loopback: false },
+  { name: "Google Gemini", provider_type: "gemini", base_url: "https://generativelanguage.googleapis.com", allow_loopback: false },
+  { name: "OpenRouter", provider_type: "openrouter", base_url: "https://openrouter.ai/api/v1", allow_loopback: false },
+  { name: "Groq", provider_type: "openai_compatible", base_url: "https://api.groq.com/openai/v1", allow_loopback: false },
+  { name: "Together AI", provider_type: "openai_compatible", base_url: "https://api.together.xyz/v1", allow_loopback: false },
+  { name: "DeepSeek", provider_type: "openai_compatible", base_url: "https://api.deepseek.com/v1", allow_loopback: false },
+  { name: "Mistral", provider_type: "openai_compatible", base_url: "https://api.mistral.ai/v1", allow_loopback: false },
+  { name: "xAI Grok", provider_type: "openai_compatible", base_url: "https://api.x.ai/v1", allow_loopback: false },
+  { name: "Ollama (this Mac)", provider_type: "openai_compatible", base_url: "http://127.0.0.1:11434/v1", allow_loopback: true },
+  { name: "LM Studio (this Mac)", provider_type: "openai_compatible", base_url: "http://127.0.0.1:1234/v1", allow_loopback: true },
+  { name: "vLLM (this Mac)", provider_type: "openai_compatible", base_url: "http://127.0.0.1:8000/v1", allow_loopback: true },
+];
+
+/** Provider type → the deployment protocol family its models speak. */
+function familyFor(providerType: string): string {
+  if (providerType === "anthropic") return "anthropic_messages";
+  if (providerType === "gemini") return "gemini_generate_content";
+  return "openai_chat";
+}
+
 /**
  * Providers (Phase 15): master-detail. The provider list lives on the left;
  * the selected provider's credentials and deployments live in fixed panels on
@@ -218,6 +248,32 @@ export function ProvidersScreen() {
             Allow loopback HTTP (Ollama/LM Studio on this Mac)
             <Tooltip label="Security gate: plain-HTTP is only allowed to 127.0.0.1/localhost when this is checked. Internet providers always use https." />
           </label>
+          <label className="text-xs font-medium text-zinc-500 sm:col-span-2 dark:text-zinc-400">
+            Start from a well-known provider
+            <select
+              aria-label="Provider preset"
+              defaultValue=""
+              onChange={(e) => {
+                const preset = PRESETS[Number(e.target.value)];
+                if (preset) {
+                  setForm({
+                    name: preset.name,
+                    base_url: preset.base_url,
+                    provider_type: preset.provider_type,
+                    allow_loopback: preset.allow_loopback,
+                  });
+                }
+              }}
+              className={INPUT + " mt-1 w-full"}
+            >
+              <option value="">— choose a preset (fills everything below) —</option>
+              {PRESETS.map((preset, i) => (
+                <option key={preset.name} value={i}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="sm:col-span-2">
             <button
               type="submit"
@@ -315,7 +371,12 @@ export function ProvidersScreen() {
                 </div>
               </div>
               <CredentialsPanel providerId={selected.id} run={run} busy={busy === "loading"} />
-              <DeploymentsPanel providerId={selected.id} run={run} busy={busy === "loading"} />
+              <DeploymentsPanel
+                providerId={selected.id}
+                defaultFamily={familyFor(selected.provider_type)}
+                run={run}
+                busy={busy === "loading"}
+              />
             </div>
           ) : (
             providers !== null &&
@@ -492,10 +553,12 @@ function CredentialsPanel({
 
 function DeploymentsPanel({
   providerId,
+  defaultFamily,
   run,
   busy,
 }: {
   providerId: string;
+  defaultFamily: string;
   run: (fn: () => Promise<unknown>) => Promise<void>;
   busy: boolean;
 }) {
@@ -540,6 +603,10 @@ function DeploymentsPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  // Protocol family follows the provider's type (preset-aware).
+  useEffect(() => {
+    setModelForm((f) => ({ ...f, protocol_family: defaultFamily }));
+  }, [defaultFamily, providerId]);
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
