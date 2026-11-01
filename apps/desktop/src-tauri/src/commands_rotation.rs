@@ -205,7 +205,6 @@ pub async fn hash_profile_target(agent_id: String, file_index: usize) -> Result<
 /// config instead of replacing whole files (user data preservation).
 #[tauri::command]
 pub async fn read_profile_target(
-    state: State<'_, AppState>,
     agent_id: String,
     file_index: usize,
 ) -> Result<String, String> {
