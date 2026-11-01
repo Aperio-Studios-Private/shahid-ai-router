@@ -751,6 +751,196 @@ impl CloudBackupProvider for GistProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Cloudflare D1 — REST target: account id + database id + API token. The DSN
+// format is "{account_id}/{database_id}".
+// ---------------------------------------------------------------------------
+
+pub struct D1Provider {
+    account_id: String,
+    database_id: String,
+    token: String,
+    api_base: String,
+    client: reqwest::Client,
+}
+
+/// One row from the D1 query API.
+#[derive(serde::Deserialize)]
+struct D1QueryResponse {
+    result: Vec<D1QueryResult>,
+}
+
+#[derive(serde::Deserialize)]
+struct D1QueryResult {
+    #[serde(default)]
+    results: Vec<Value>,
+}
+
+impl D1Provider {
+    /// # Errors
+    /// Missing/ill-formed account id, database id, or token.
+    pub fn new(dsn: &str, token: &str, client: reqwest::Client) -> Result<Self, String> {
+        let (account, database) = dsn.trim().split_once('/').ok_or_else(|| {
+            "the D1 DSN must be your account id and database id joined by / (see the setup guide)"
+                .to_string()
+        })?;
+        if account.trim().is_empty() || database.trim().is_empty() {
+            return Err("both the account id and the database id are required".to_string());
+        }
+        if token.trim().is_empty() {
+            return Err("the Cloudflare API token is required".to_string());
+        }
+        Ok(Self {
+            account_id: account.trim().to_string(),
+            database_id: database.trim().to_string(),
+            token: token.trim().to_string(),
+            api_base: "https://api.cloudflare.com/client/v4".to_string(),
+            client,
+        })
+    }
+
+    /// Test seam for contract tests.
+    #[cfg(test)]
+    fn with_api_base(mut self, base: &str) -> Self {
+        self.api_base = base.to_string();
+        self
+    }
+
+    fn url(&self) -> String {
+        format!(
+            "{}/accounts/{}/d1/database/{}/query",
+            self.api_base, self.account_id, self.database_id
+        )
+    }
+
+    async fn query(&self, sql: &'static str, params: &[Value]) -> Result<Vec<Value>, String> {
+        let resp = self
+            .client
+            .post(self.url())
+            .header("authorization", format!("Bearer {}", self.token))
+            .json(&json!({ "sql": sql, "params": params }))
+            .send()
+            .await
+            .map_err(|e| transport_err(&e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!(
+                "cloudflare answered HTTP {status} — check the ids and token scope (D1 edit)"
+            ));
+        }
+        let parsed: D1QueryResponse = resp
+            .json()
+            .await
+            .map_err(|_| "cloudflare response decode failed".to_string())?;
+        if parsed.result.is_empty()
+            || !parsed.result[0].results.is_empty()
+            || parsed.result.len() > 1
+        {
+            // Writes return an empty results array; SELECTs return rows.
+        }
+        Ok(parsed.result.into_iter().flat_map(|r| r.results).collect())
+    }
+}
+
+impl CloudBackupProvider for D1Provider {
+    fn test(&self) -> CloudFut<'_, ()> {
+        Box::pin(async move { self.query("SELECT 1", &[]).await.map(|_| ()) })
+    }
+
+    fn upload(
+        &self,
+        envelope: String,
+        sha256: String,
+        device: String,
+        mode: String,
+    ) -> CloudFut<'_, ()> {
+        Box::pin(async move {
+            let id = format!(
+                "{}-{}",
+                chrono::Utc::now().timestamp_millis(),
+                cloud_random_hex()
+            );
+            self.query(
+                "INSERT INTO sair_backups (id, device_id, app_version, mode, payload, sha256) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (id) DO NOTHING",
+                &[
+                    Value::String(id),
+                    Value::String(device),
+                    Value::String(env!("CARGO_PKG_VERSION").to_string()),
+                    Value::String(mode),
+                    Value::String(envelope),
+                    Value::String(sha256),
+                ],
+            )
+            .await
+            .map(|_| ())
+        })
+    }
+
+    fn list(&self) -> CloudFut<'_, Vec<SnapshotMeta>> {
+        Box::pin(async move {
+            let rows = self
+                .query(
+                    "SELECT id, device_id, app_version, mode, sha256, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_utc, length(payload) AS bytes FROM sair_backups ORDER BY created_at DESC LIMIT 100",
+                    &[],
+                )
+                .await?;
+            Ok(rows
+                .iter()
+                .map(|r| SnapshotMeta {
+                    id: r["id"].as_str().unwrap_or_default().to_string(),
+                    device_id: r["device_id"].as_str().unwrap_or_default().to_string(),
+                    app_version: r["app_version"].as_str().unwrap_or_default().to_string(),
+                    mode: r["mode"].as_str().unwrap_or_default().to_string(),
+                    created_at: r["created_utc"].as_str().unwrap_or_default().to_string(),
+                    sha256: r["sha256"].as_str().unwrap_or_default().to_string(),
+                    bytes: r["bytes"].as_i64().unwrap_or(0),
+                })
+                .collect())
+        })
+    }
+
+    fn download(&self, id: String) -> CloudFut<'_, String> {
+        Box::pin(async move {
+            let rows = self
+                .query(
+                    "SELECT payload FROM sair_backups WHERE id = ?1",
+                    &[Value::String(id)],
+                )
+                .await?;
+            rows.into_iter()
+                .next()
+                .and_then(|r| r["payload"].as_str().map(str::to_string))
+                .ok_or_else(|| "snapshot not found (pruned or deleted?)".to_string())
+        })
+    }
+
+    fn prune(&self, device: String, keep: usize) -> CloudFut<'_, u64> {
+        Box::pin(async move {
+            self.query(
+                "DELETE FROM sair_backups WHERE device_id = ?1 AND id NOT IN (SELECT id FROM sair_backups WHERE device_id = ?2 ORDER BY created_at DESC LIMIT ?3)",
+                &[
+                    Value::String(device.clone()),
+                    Value::String(device),
+                    Value::Number(keep.into()),
+                ],
+            )
+            .await
+            .map(|_| 0)
+        })
+    }
+
+    fn purge(&self, device: String) -> CloudFut<'_, u64> {
+        Box::pin(async move {
+            self.query(
+                "DELETE FROM sair_backups WHERE device_id = ?1",
+                &[Value::String(device)],
+            )
+            .await
+            .map(|_| 0)
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Envelope build (reuses Phase 10 code; Argon2/GCM via spawn_blocking).
 // ---------------------------------------------------------------------------
 

@@ -27,7 +27,11 @@ pub async fn cloud_configure(
     passphrase: Option<String>,
     schedule_enabled: bool,
 ) -> Result<serde_json::Value, String> {
-    if provider != "neon" && provider != "supabase" && provider != "github-gist" {
+    if provider != "neon"
+        && provider != "supabase"
+        && provider != "github-gist"
+        && provider != "cloudflare-d1"
+    {
         return Err(format!("unsupported cloud provider: {provider}"));
     }
     if mode != "encrypted" && mode != "config" {
@@ -48,6 +52,9 @@ pub async fn cloud_configure(
     if provider == "github-gist" && key.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err("the GitHub token is required".to_string());
     }
+    if provider == "cloudflare-d1" && key.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("the Cloudflare API token is required".to_string());
+    }
 
     // Test BEFORE persisting anything.
     {
@@ -58,6 +65,14 @@ pub async fn cloud_configure(
             move || -> Result<Arc<dyn crate::cloud_backup::CloudBackupProvider>, String> {
                 Ok(match provider_name.as_str() {
                     "neon" => Arc::new(crate::cloud_backup::NeonProvider::new(&dsn)?),
+                    "cloudflare-d1" => Arc::new(crate::cloud_backup::D1Provider::new(
+                        dsn.trim(),
+                        key.trim(),
+                        reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(30))
+                            .build()
+                            .map_err(|e| format!("client build failed: {e}"))?,
+                    )?),
                     "github-gist" => Arc::new(crate::cloud_backup::GistProvider::new(
                         key.trim(),
                         &dsn,

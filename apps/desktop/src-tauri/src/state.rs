@@ -504,6 +504,25 @@ impl AppState {
                     dsn.as_str(),
                 )?))
             }
+            "cloudflare-d1" => {
+                let key = config
+                    .key
+                    .as_ref()
+                    .ok_or_else(|| "Cloudflare API token missing from vault".to_string())?;
+                let dsn = config
+                    .dsn
+                    .as_ref()
+                    .ok_or_else(|| "D1 DSN missing from vault".to_string())?;
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| format!("client build failed: {e}"))?;
+                Ok(Arc::new(crate::cloud_backup::D1Provider::new(
+                    dsn.as_str(),
+                    key.as_str(),
+                    client,
+                )?))
+            }
             "github-gist" => {
                 let key = config
                     .key

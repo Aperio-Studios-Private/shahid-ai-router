@@ -62,6 +62,10 @@ NVIDIA NIM exposes an OpenAI-compatible API, so it works through the generic
 
 Run once in your Neon/Supabase SQL editor:
 
+**Cloudflare D1:** create a D1 database, then run the same SQL via
+`wrangler d1 execute <db>` (or the dashboard console). The app's DSN is
+`{account_id}/{database_id}` and the token needs the D1 edit scope.
+
 ```sql
 create table if not exists sair_backups (
   id          text primary key,
