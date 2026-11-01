@@ -432,6 +432,21 @@ pub async fn add_model(
     // Cloud auto-backup (Phase 12): config may change → schedule a sync.
     state.mark_cloud_dirty();
 
+    // Idempotent (user-reported UNIQUE crash): re-adding an existing model
+    // returns its row instead of violating models(provider_id, model_id).
+    // Capabilities of an existing row are intentionally left untouched — the
+    // UI sends defaults and must not clobber real capability data.
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT id FROM models WHERE provider_id = ?1 AND model_id = ?2")
+            .bind(&provider_id)
+            .bind(&model_id)
+            .fetch_optional(state.db.pool())
+            .await
+            .map_err(|e| e.to_string())?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+
     let capabilities = json!({
         "streaming": streaming,
         "tool_calling": tool_calling,
@@ -462,6 +477,23 @@ pub async fn add_deployment(
 ) -> Result<String, String> {
     // Cloud auto-backup (Phase 12): config may change → schedule a sync.
     state.mark_cloud_dirty();
+
+    // Idempotent (matches idx_deployments_unique semantics): re-adding the
+    // same provider+model+override returns the existing deployment instead of
+    // a UNIQUE crash.
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM deployments WHERE provider_id = ?1 AND model_id = ?2 \
+         AND COALESCE(endpoint_override, '') = COALESCE(?3, '')",
+    )
+    .bind(&provider_id)
+    .bind(&model_pk)
+    .bind(endpoint_override.as_deref().unwrap_or(""))
+    .fetch_optional(state.db.pool())
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
 
     state
         .db
