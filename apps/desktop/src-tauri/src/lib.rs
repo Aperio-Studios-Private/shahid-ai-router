@@ -75,6 +75,7 @@ pub fn run() {
             commands_rotation::credential_health_summary,
             commands_rotation::generate_agent_profile,
             commands_rotation::hash_profile_target,
+            commands_rotation::read_profile_target,
             commands_rotation::apply_agent_profile,
             commands_rotation::list_request_records,
             commands_rotation::usage_summary,

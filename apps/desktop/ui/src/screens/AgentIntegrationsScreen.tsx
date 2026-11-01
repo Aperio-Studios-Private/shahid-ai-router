@@ -107,14 +107,36 @@ export function AgentIntegrationsScreen() {
         fastAlias: null,
       });
       if (!result || !result.applicable) throw "Claude Code profile unavailable";
-      const content = result.config_text.replaceAll(
-        "<<GATEWAY_TOKEN>>",
-        token,
-      );
-      const hash = await invokeOr<string>("hash_profile_target", {
+
+      // MERGE, don't replace (user data preservation): parse the existing
+      // settings.json, overwrite only our env keys, keep everything else
+      // (permissions, model prefs, skill overrides…). Falls back to the
+      // generated full file when the existing content isn't valid JSON.
+      const existing =
+        (await invokeOr<string>("read_profile_target", {
+          agentId: result.agent_id,
+          fileIndex: 0,
+        })) ?? "";
+      let content = result.config_text.replaceAll("<<GATEWAY_TOKEN>>", token);
+      if (existing.trim()) {
+        try {
+          const doc = JSON.parse(existing) as {
+            env?: Record<string, unknown>;
+            [key: string]: unknown;
+          };
+          const generated = JSON.parse(
+            result.config_text.replaceAll("<<GATEWAY_TOKEN>>", token),
+          ) as { env?: Record<string, unknown> };
+          doc.env = { ...(doc.env ?? {}), ...(generated.env ?? {}) };
+          content = JSON.stringify(doc, null, 2) + "\n";
+        } catch {
+          // Existing file is not valid JSON — keep the generated full file.
+        }
+      }
+      const hash = (await invokeOr<string>("hash_profile_target", {
         agentId: result.agent_id,
         fileIndex: 0,
-      });
+      })) ?? "";
       const ok = window.confirm(
         `One-click connect Claude Code:\n\n` +
           `• Writes ${result.files[0]} with the gateway URL + REAL token\n` +
@@ -130,7 +152,7 @@ export function AgentIntegrationsScreen() {
         agentId: result.agent_id,
         fileIndex: 0,
         content,
-        expectedExisting: hash ?? "",
+        expectedExisting: hash,
       });
       setMessage(
         `Connected! ${applied} written. Restart Claude Code, then pick model "${alias || "fast-model"}". Rollback: ${result.rollback}`,

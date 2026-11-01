@@ -200,6 +200,24 @@ pub async fn hash_profile_target(agent_id: String, file_index: usize) -> Result<
     profile_apply::hash_file(&target)
 }
 
+/// Reads the current content of an allowlisted profile target (empty when
+/// the file does not exist yet). Lets the UI MERGE env blocks into existing
+/// config instead of replacing whole files (user data preservation).
+#[tauri::command]
+pub async fn read_profile_target(
+    state: State<'_, AppState>,
+    agent_id: String,
+    file_index: usize,
+) -> Result<String, String> {
+    let profile = sair_domain::profiles::generate_profile(&agent_id, 8787, String::new(), None)
+        .ok_or("unknown agent")?;
+    let target = profile_apply::resolve_target(&profile, file_index)?;
+    if !target.exists() {
+        return Ok(String::new());
+    }
+    std::fs::read_to_string(&target).map_err(|e| format!("read failed: {e}"))
+}
+
 #[tauri::command]
 pub async fn apply_agent_profile(
     state: State<'_, AppState>,
