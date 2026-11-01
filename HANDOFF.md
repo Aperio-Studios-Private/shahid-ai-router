@@ -133,6 +133,8 @@ commit, deployment natural-key restore, alias bindings, settings/profiles stagin
 - **Bash heredocs truncate in this environment** — write patch scripts with the Write tool, never inline heredocs.
 - Backticks inside double-quoted bash/python strings get command-substituted — use file-based patches.
 
+- **tauri-build does NOT re-embed a changed `frontendDist` on incremental cargo builds** — a plain `cargo build --release` after `npm run build` can keep serving the OLD UI (observed 2026-11-01: week-old binary shown as a blank window). Always launch via `scripts/run-app.sh` (touches `build.rs`, rebuilds frontend first) or run `touch apps/desktop/src-tauri/build.rs` before cargo.
+
 ## 8. Key documents index
 
 | Doc | Content |
