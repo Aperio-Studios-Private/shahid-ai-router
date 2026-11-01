@@ -167,6 +167,116 @@ pub async fn test_provider(
     }
 }
 
+/// Phase 15: fetches the provider's live model list so users never type ids
+/// blindly. Shape-matched per protocol family:
+///  - OpenAI-compatible (incl. NIM/OpenRouter/Ollama): GET {base}/models → data[].id
+///  - Anthropic: GET {base}/v1/models (x-api-key + anthropic-version) → data[].id
+///  - Gemini: GET {base}/v1beta/models (x-goog-api-key) → models[].name ("models/x" → "x")
+/// Bounded read via sair-providers; credential never appears in errors.
+#[tauri::command]
+pub async fn fetch_provider_models(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<String>, String> {
+    let repos = state.db.repos();
+    let providers = repos.list_providers().await.map_err(|e| e.to_string())?;
+    let Some(provider) = providers.iter().find(|p| p.id == id) else {
+        return Err("provider not found".to_string());
+    };
+    let credentials = repos
+        .list_credentials(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(credential) = credentials.iter().find(|c| c.status == "active") else {
+        return Err("no active credential — add an API key first".to_string());
+    };
+    let secret_ref = SecretRef::parse(&credential.secret_ref).map_err(|e| e.to_string())?;
+    let secret = state
+        .vault
+        .retrieve(&secret_ref)
+        .map_err(|_| "vault unavailable".to_string())?;
+    let secret = SecretBytes::new(secret);
+    let key = secret.expose_str().map_err(|_| "credential not UTF-8".to_string())?;
+
+    let policy = if provider.allow_loopback {
+        SsrfPolicy::allow_loopback()
+    } else {
+        SsrfPolicy::default()
+    };
+    let client = build_client(policy);
+    let base = provider.base_url.trim_end_matches('/');
+    let ptype = provider.provider_type.as_str();
+
+    let path = match ptype {
+        "anthropic" => "/v1/models?limit=1000",
+        "gemini" => "/v1beta/models",
+        _ => "/models",
+    };
+    let parsed_url =
+        url::Url::parse(&format!("{base}{path}")).map_err(|e| e.to_string())?;
+    let request = client
+        .request(reqwest::Method::GET, parsed_url)
+        .map_err(|e| format!("SSRF policy: {e}"))?;
+    let auth = match ptype {
+        "anthropic" => request
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01"),
+        "gemini" => request.header("x-goog-api-key", key),
+        _ => request.bearer_auth(key),
+    };
+
+    let response = auth
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| "could not reach the provider (network or URL wrong?)".to_string())?;
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "the provider answered HTTP {status} — check the base URL and key"
+        ));
+    }
+    let bytes = sair_providers::http::read_body_bounded(
+        response,
+        8 * 1024 * 1024, // 8 MiB is generous for a model list
+    )
+    .await
+    .map_err(|_| "the provider's model list was too large or the connection broke".to_string())?;
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| "the provider returned a non-JSON model list".to_string())?;
+
+    let mut models: Vec<String> = if ptype == "gemini" {
+        parsed["models"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["name"].as_str())
+                    .map(|n| n.strip_prefix("models/").unwrap_or(n).to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        parsed["data"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["id"].as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if models.is_empty() {
+        return Err(
+            "the provider returned an empty model list — is the base URL right for this provider?"
+                .to_string(),
+        );
+    }
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
 #[derive(Debug, Serialize)]
 pub struct CredentialView {
     pub id: String,

@@ -51,6 +51,7 @@ pub fn run() {
             commands_management::set_provider_enabled,
             commands_management::delete_provider,
             commands_management::test_provider,
+            commands_management::fetch_provider_models,
             commands_management::list_credentials,
             commands_management::add_credential,
             commands_management::set_credential_status,

@@ -6,7 +6,9 @@ import {
   Copy,
   FlaskConical,
   KeyRound,
+  ListPlus,
   Plus,
+  Search,
   Server,
   Trash2,
 } from "lucide-react";
@@ -500,6 +502,31 @@ function DeploymentsPanel({
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [modelForm, setModelForm] = useState({ model_id: "", protocol_family: "openai_chat" });
+  const [fetched, setFetched] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [modelQuery, setModelQuery] = useState("");
+
+  const fetchModels = async () => {
+    setFetching(true);
+    setFetchError(null);
+    try {
+      const list = await invokeOr<string[]>("fetch_provider_models", { providerId });
+      setFetched(list ?? []);
+      setModelQuery("");
+      if (!modelForm.model_id && list && list.length > 0) {
+        setModelForm((f) => ({ ...f, model_id: list[0] }));
+      }
+    } catch (err) {
+      setFetchError(String(err));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const filteredModels = (fetched ?? []).filter((m) =>
+    m.toLowerCase().includes(modelQuery.trim().toLowerCase()),
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -568,6 +595,66 @@ function DeploymentsPanel({
           ))}
         </ul>
       )}
+      <div className="mt-3 rounded-lg border border-zinc-100 bg-zinc-50/60 p-2.5 dark:border-zinc-800 dark:bg-zinc-800/40">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={fetching}
+            onClick={() => void fetchModels()}
+            className={BTN + " border-[#006eb9]/40 text-[#006eb9] dark:border-sky-500/40 dark:text-sky-300"}
+          >
+            <ListPlus size={13} aria-hidden="true" />
+            {fetching ? "Fetching…" : fetched ? "Re-fetch model list" : "Fetch model list"}
+          </button>
+          <Hint>
+            Pulls the live model catalogue from the provider so you never type ids
+            blindly.
+          </Hint>
+        </div>
+        {fetchError && (
+          <p role="alert" className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+            {fetchError}
+          </p>
+        )}
+        {fetched !== null && (
+          <div className="mt-2">
+            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 dark:border-zinc-700 dark:bg-zinc-800">
+              <Search size={13} className="text-zinc-400" aria-hidden="true" />
+              <input
+                placeholder={`Search ${fetched.length} models…`}
+                aria-label="Search models"
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+                className="w-full bg-transparent text-xs outline-none placeholder:text-zinc-400"
+              />
+            </div>
+            <ul className="mt-1.5 max-h-44 space-y-0.5 overflow-y-auto">
+              {filteredModels.length === 0 && (
+                <li className="px-2 py-2 text-xs text-zinc-400">No models match “{modelQuery}”</li>
+              )}
+              {filteredModels.map((m) => (
+                <li key={m}>
+                  <button
+                    type="button"
+                    onClick={() => setModelForm((f) => ({ ...f, model_id: m }))}
+                    className={
+                      "flex w-full items-center justify-between rounded-md px-2 py-1 text-left font-mono text-xs " +
+                      (modelForm.model_id === m
+                        ? "bg-[#006eb9]/10 text-[#006eb9] dark:bg-sky-500/10 dark:text-sky-300"
+                        : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800")
+                    }
+                  >
+                    <span className="truncate">{m}</span>
+                    {modelForm.model_id === m && (
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide">selected</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
       <form
         className="mt-3 flex flex-wrap items-center gap-2"
         onSubmit={(e) => {
@@ -592,7 +679,7 @@ function DeploymentsPanel({
       >
         <input
           required
-          placeholder="Upstream model id"
+          placeholder="Upstream model id (or pick above)"
           aria-label="Upstream model id"
           value={modelForm.model_id}
           onChange={(e) => setModelForm({ ...modelForm, model_id: e.target.value })}
