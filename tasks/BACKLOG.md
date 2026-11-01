@@ -133,3 +133,13 @@ Perf budget measurement, full security review pass, clean-install checklist, SBO
 | P13-T05 | ProvidersScreen: tooltips, hints, spinner/empty/busy states | PASS |
 | P13-T06 | Gateway/Backup/Agent tooltips | PASS |
 | P13-T07 | docs/08 redesign + state matrix; phase report | PASS |
+
+## Phase 16 — Automation & ease pass (COMPLETE — see reports/phase-reports/phase-13.md addendum)
+
+| ID | Task | Status |
+|---|---|---|
+| P16-T01 | fetch_provider_models returns ModelInfo w/ auto-detected caps (OpenRouter architecture/supported_parameters/context_length; safe chat defaults elsewhere) | PASS |
+| P16-T02 | One-click deploy: clicking a fetched model deploys it (idempotent add_model/add_deployment from the audit-fix) | PASS |
+| P16-T03 | Home "Copy URL + key" connection block | PASS |
+| P16-T04 | Automatic-setup wizard: preset → key → model pick (small/fast preference) → alias+bind in one flow | PASS |
+| P16-T05 | Real Settings screen (gateway tuning + retention, validated save via new get_public_settings/save_settings IPC, restart-gateway button) | PASS |
