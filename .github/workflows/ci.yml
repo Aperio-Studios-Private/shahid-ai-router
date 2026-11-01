@@ -65,6 +65,39 @@ jobs:
       - name: Production build
         run: npm run build
 
+  # Windows release binary (Phase 16+: closes release gate (a) — every push
+  # produces a fresh signed-off .exe + SHA-256 as a downloadable artifact;
+  # the owner no longer has to build Windows by hand).
+  windows-release:
+    name: Windows release binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+      - name: Build frontend (embedded by generate_context!)
+        run: npm ci && npm run build
+        working-directory: apps/desktop/ui
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release -p shahid-ai-router
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target/release/shahid-ai-router.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash *target/release/shahid-ai-router.exe" | Out-File -Encoding ascii release-checksum-sha256.txt
+          Get-Content release-checksum-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shahid-ai-router-windows-x64
+          path: |
+            target/release/shahid-ai-router.exe
+            release-checksum-sha256.txt
+
   # Dependency audit (Phase 11 plan F-11-2): the phase-11 report and
   # CHANGELOG record `cargo audit` + `npm audit` runs with 0 vulnerabilities;
   # this job makes the claim part of the pipeline (audit P1 fix — the
