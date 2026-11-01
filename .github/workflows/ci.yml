@@ -24,6 +24,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # generate_context! embeds frontendDist at compile time (there is no
+      # devUrl anymore — debug builds embed the UI too), so the frontend must
+      # exist before the Rust job compiles.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/ui/package-lock.json
+      - name: Build frontend (embedded by generate_context!)
+        run: npm ci && npm run build
+        working-directory: apps/desktop/ui
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
