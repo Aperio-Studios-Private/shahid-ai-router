@@ -37,15 +37,15 @@ pub async fn save_settings(
     if !gateway.is_object() {
         return Err("gateway settings must be an object".to_string());
     }
-    if let Some(port) = gateway.get("port").and_then(Value::as_u64) {
-        if port == 0 || port > u16::MAX as u64 {
-            return Err(format!("invalid gateway port: {port}"));
-        }
+    if let Some(port) = gateway.get("port").and_then(Value::as_u64)
+        && (port == 0 || port > u16::MAX as u64)
+    {
+        return Err(format!("invalid gateway port: {port}"));
     }
-    if let Some(limit) = gateway.get("body_limit_bytes").and_then(Value::as_u64) {
-        if limit < 1024 {
-            return Err("body limit must be at least 1 KiB".to_string());
-        }
+    if let Some(limit) = gateway.get("body_limit_bytes").and_then(Value::as_u64)
+        && limit < 1024
+    {
+        return Err("body limit must be at least 1 KiB".to_string());
     }
     if retention_days < 1 {
         return Err("retention must be at least 1 day".to_string());
