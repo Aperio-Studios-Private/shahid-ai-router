@@ -121,3 +121,15 @@ Perf budget measurement, full security review pass, clean-install checklist, SBO
 | P12-T06 | Cloudflare D1 impl | BACKLOG (optional, not started) |
 | P12-T07 | Tests: schedule decision, DSN rules, DSN-free errors, in-memory roundtrip, Supabase contract, allowlist invariant | PASS |
 | P12-T08 | Docs: ADR-019, FR-024, docs/06/07 amendments, traceability, CHANGELOG, README | PASS |
+
+## Phase 13 — UX overhaul (COMPLETE — see reports/phase-reports/phase-13.md)
+
+| ID | Task | Status |
+|---|---|---|
+| P13-T01 | Tooltip/FieldLabel/Hint/Spinner/EmptyState components | PASS |
+| P13-T02 | Nav 14→7 + ActivityScreen tabs + footer links | PASS |
+| P13-T03 | Guided Home (live 7-step checklist, jump actions, diagram) | PASS |
+| P13-T04 | AliasesScreen: deployment dropdown, empty states, tooltips | PASS |
+| P13-T05 | ProvidersScreen: tooltips, hints, spinner/empty/busy states | PASS |
+| P13-T06 | Gateway/Backup/Agent tooltips | PASS |
+| P13-T07 | docs/08 redesign + state matrix; phase report | PASS |

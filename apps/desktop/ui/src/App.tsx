@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { SCREENS, type ScreenId } from "./lib/screens";
+import { FOOTER_SCREENS, SCREENS, type ScreenId } from "./lib/screens";
 import { invokeOr, type AppInfo } from "./lib/tauri";
 import { OverviewScreen } from "./screens/OverviewScreen";
 import { GatewayScreen } from "./screens/GatewayScreen";
 import { ProvidersScreen } from "./screens/ProvidersScreen";
 import { AliasesScreen } from "./screens/AliasesScreen";
 import { AgentIntegrationsScreen } from "./screens/AgentIntegrationsScreen";
-import { LogsScreen } from "./screens/LogsScreen";
+import { ActivityScreen } from "./screens/ActivityScreen";
 import { UsageScreen } from "./screens/UsageScreen";
 import { HealthScreen } from "./screens/HealthScreen";
+import { LogsScreen } from "./screens/LogsScreen";
 import { BackupScreen } from "./screens/BackupScreen";
 import { AboutScreen } from "./screens/AboutScreen";
 import { PlaceholderScreen } from "./screens/PlaceholderScreen";
@@ -71,29 +72,52 @@ export default function App() {
             </li>
           ))}
         </ul>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="mx-4 mt-3 rounded-md border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          {dark ? "Switch to light" : "Switch to dark"}
-        </button>
+        <ul className="space-y-0.5 border-t border-zinc-200 px-2 pt-2 dark:border-zinc-800">
+          {FOOTER_SCREENS.map((screen) => (
+            <li key={screen.id}>
+              <button
+                type="button"
+                aria-current={active === screen.id ? "page" : undefined}
+                onClick={() => setActive(screen.id)}
+                className={
+                  "w-full rounded-md px-3 py-1 text-left text-xs " +
+                  (active === screen.id
+                    ? "font-medium text-[#006eb9] dark:text-sky-400"
+                    : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800")
+                }
+              >
+                {screen.label}
+              </button>
+            </li>
+          ))}
+          <li>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="w-full rounded-md px-3 py-1 text-left text-xs text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              {dark ? "Switch to light" : "Switch to dark"}
+            </button>
+          </li>
+        </ul>
       </nav>
       <main className="flex-1 overflow-y-auto p-6">
         {active === "overview" ? (
-          <OverviewScreen appInfo={appInfo} />
+          <OverviewScreen appInfo={appInfo} onNavigate={setActive} />
         ) : active === "gateway" ? (
           <GatewayScreen />
         ) : active === "providers" ||
           active === "api-keys" ||
           active === "models" ||
           active === "deployments" ? (
-          // docs/08 amendment: Models/Deployments fold into Providers.
+          // docs/08 amendment: Models/Deployments/API-Keys fold into Providers.
           <ProvidersScreen />
         ) : active === "routing" ? (
           <AliasesScreen />
         ) : active === "agent-integrations" ? (
           <AgentIntegrationsScreen />
+        ) : active === "activity" ? (
+          <ActivityScreen />
         ) : active === "logs" ? (
           <LogsScreen />
         ) : active === "usage" ? (
@@ -106,8 +130,8 @@ export default function App() {
           <AboutScreen appInfo={appInfo} />
         ) : (
           <PlaceholderScreen
-            title={SCREENS.find((s) => s.id === active)?.label ?? ""}
-            note="This screen arrives with its implementation phase. Unimplemented requirements stay visibly incomplete (docs/01 acceptance rule)."
+            title={SCREENS.find((s) => s.id === active)?.label ?? "Settings"}
+            note="Settings arrive in a later phase. Unimplemented requirements stay visibly incomplete (docs/01 acceptance rule)."
           />
         )}
       </main>

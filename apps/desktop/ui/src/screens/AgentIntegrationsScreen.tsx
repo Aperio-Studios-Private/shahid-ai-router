@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { invokeOr } from "../lib/tauri";
+import { Tooltip } from "../components/ui";
 
 interface ProfileResult {
   agent_id: string;
@@ -102,7 +103,10 @@ export function AgentIntegrationsScreen() {
 
       <div className="mt-4 flex flex-wrap items-end gap-2 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase tracking-wide text-zinc-500">Agent</span>
+          <span className="text-xs uppercase tracking-wide text-zinc-500">
+            Agent
+            <Tooltip label="The app writes the correct base URL + token placeholder into the chosen tool's config file. Applying always asks for consent, backs the file up first, and refuses if the file changed since you previewed." />
+          </span>
           <select
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}

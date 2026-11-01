@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invokeOr } from "../lib/tauri";
+import { Tooltip } from "../components/ui";
 
 interface GatewayState {
   running: boolean;
@@ -98,6 +99,7 @@ export function GatewayScreen() {
       <h1 className="text-lg font-semibold">Local Gateway</h1>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
         Binds 127.0.0.1 only. Requests require the gateway token.
+        <Tooltip label="The gateway is a small HTTP server inside this app. It listens ONLY on your Mac's loopback interface (127.0.0.1) — nothing on the network can reach it. AI tools authenticate with the token shown below." />
       </p>
 
       <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
@@ -156,7 +158,10 @@ export function GatewayScreen() {
         </button>
       </div>
 
-      <h2 className="mt-8 text-sm font-semibold">Gateway token</h2>
+      <h2 className="mt-8 text-sm font-semibold">
+        Gateway token
+        <Tooltip label="Think of it as a local password your AI tools send with every request (Authorization: Bearer …). It lives in the macOS Keychain; the app only shows it when you click Reveal." />
+      </h2>
       <div className="mt-2 flex items-center gap-2">
         <code className="flex-1 truncate rounded-md border border-zinc-200 bg-zinc-100 px-3 py-2 font-mono text-xs dark:border-zinc-800 dark:bg-zinc-900">
           {revealed && token ? token : TOKEN_MASK}

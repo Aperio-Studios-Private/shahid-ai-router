@@ -11,6 +11,7 @@ export type ScreenId =
   | "usage"
   | "health"
   | "backup"
+  | "activity"
   | "settings"
   | "about";
 
@@ -19,20 +20,22 @@ export interface Screen {
   label: string;
 }
 
-/** Navigation structure mandated by docs/08_UX_SPEC.md. */
+/** Primary navigation (Phase 13 redesign, docs/08 amendment): 7 real
+ * destinations. API Keys/Models/Deployments fold into Providers; Logs/Usage/
+ * Health fold into Activity. The ScreenId union keeps the old ids so deep
+ * routes and the docs/08 amendments stay valid. */
 export const SCREENS: Screen[] = [
-  { id: "overview", label: "Overview" },
+  { id: "overview", label: "Home" },
   { id: "providers", label: "Providers" },
-  { id: "api-keys", label: "API Keys" },
-  { id: "models", label: "Models" },
-  { id: "deployments", label: "Deployments" },
-  { id: "routing", label: "Routing Policies" },
+  { id: "routing", label: "Routing" },
   { id: "agent-integrations", label: "Agent Integrations" },
   { id: "gateway", label: "Local Gateway" },
-  { id: "logs", label: "Request Logs" },
-  { id: "usage", label: "Usage" },
-  { id: "health", label: "Health Monitor" },
+  { id: "activity", label: "Activity" },
   { id: "backup", label: "Backup & Restore" },
+];
+
+/** Footer links (low-traffic destinations). */
+export const FOOTER_SCREENS: Screen[] = [
   { id: "settings", label: "Settings" },
   { id: "about", label: "About" },
 ];

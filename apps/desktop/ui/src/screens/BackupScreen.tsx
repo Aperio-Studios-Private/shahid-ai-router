@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { invokeOr } from "../lib/tauri";
+import { Tooltip } from "../components/ui";
 import { CloudBackupSection } from "./CloudBackupSection";
 
 interface ExportResult {
@@ -145,6 +146,10 @@ export function BackupScreen() {
           <option value="config">Config-only (no API keys)</option>
           <option value="encrypted">Encrypted (includes keys; needs passphrase)</option>
         </select>
+        <span className="inline-flex items-center text-xs text-zinc-500 dark:text-zinc-400">
+          Mode
+          <Tooltip label="Config-only restores your setup but marks credentials incomplete (re-enter keys). Encrypted includes your API keys as AES-256-GCM ciphertext — unusable without your passphrase. Either way nothing unencrypted ever leaves this Mac." />
+        </span>
         {mode === "encrypted" && (
           <input
             required
